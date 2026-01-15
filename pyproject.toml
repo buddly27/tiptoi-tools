@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tiptoi-tools"
+version = "0.1.0"
+description = "Tiptoi GME inspection and extraction tools."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+keywords = ["tiptoi", "gme", "cli"]
+authors = [
+    { name = "Jeremy Retailleau", email = "jeremy.retailleau@gmail.com" }
+]
+dependencies = [
+    "click>=8.3.1,<9",
+    "PyYAML>=6.0.3,<7"
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Utilities",
+]
+
+[project.scripts]
+tiptoi-tools = "tiptoi_tools.__main__:main"
+
+[project.urls]
+Documentation = "https://buddly27.github.io/tiptoi-tools"
+Repository = "https://github.com/buddly27/tiptoi-tools"
+Issues = "https://github.com/buddly27/tiptoi-tools/issues"
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.14.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+fixable = ["ALL"]
+
+[tool.ruff.format]
+skip-magic-trailing-comma = false
