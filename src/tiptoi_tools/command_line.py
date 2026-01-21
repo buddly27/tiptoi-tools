@@ -364,3 +364,501 @@ def _print_audio_xors(entries: list[tiptoi_tools.gme.MediaEntry]) -> str:
     if not xors:
         return "[]"
     return "[" + ",".join(f"{x:#04X}" for x in xors) + "]"
+
+
+@cli.command("scripts")
+@click.argument(
+    "gme_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+@click.argument("oid", type=int, required=False)
+@click.option(
+    "--action",
+    type=click.Choice(["play", "game", "jump", "cancel", "timer", "arithmetic"]),
+    help="Filter scripts by action type",
+)
+@click.option("--media", type=int, help="Find scripts referencing this media index")
+@click.option("--register", type=int, help="Find scripts using this register")
+def scripts_cmd(
+    gme_file: Path,
+    oid: int | None,
+    action: str | None,
+    media: int | None,
+    register: int | None,
+) -> None:
+    """
+    Browse and search scripts in a GME file.
+
+    With no arguments, lists all scripts with a summary.
+    With an OID argument, shows detailed info for that script.
+    Use --action, --media, or --register to filter scripts.
+    """
+    parsed = tiptoi_tools.gme.parse_file(gme_file)
+
+    # If a specific OID is requested, show detailed view
+    if oid is not None:
+        _show_script_detail(parsed, oid)
+        return
+
+    # Build list of scripts with their properties
+    script_infos = []
+    for script_oid, lines in parsed.scripts.items():
+        if lines is None or len(lines) == 0:
+            continue
+        info = _analyze_script(script_oid, lines)
+        script_infos.append(info)
+
+    if not script_infos:
+        click.echo("No scripts found.")
+        return
+
+    # Apply filters
+    if action:
+        action_map = {
+            "play": {
+                "PlayMedia",
+                "PlayMediaRange",
+                "PlayRandomInRange",
+                "PlayVariantRandom",
+                "PlayVariantAll",
+            },
+            "game": {"StartGame"},
+            "jump": {"Jump"},
+            "cancel": {"Cancel"},
+            "timer": {"SetTimer"},
+            "arithmetic": {"Arithmetic"},
+        }
+        target_actions = action_map.get(action, set())
+        script_infos = [s for s in script_infos if s["actions"] & target_actions]
+
+    if media is not None:
+        script_infos = [s for s in script_infos if media in s["media_refs"]]
+
+    if register is not None:
+        script_infos = [s for s in script_infos if register in s["registers"]]
+
+    if not script_infos:
+        click.echo("No scripts match the filters.")
+        return
+
+    # Display results
+    oid_range = f"{parsed.first_oid}-{parsed.last_oid}"
+    click.echo(f"OID Range: {oid_range} ({len(script_infos)} scripts)\n")
+
+    # Header
+    click.echo(f"{'OID':<8} {'Lines':<6} {'Actions':<35} {'Audio'}")
+    click.echo("-" * 75)
+
+    for info in script_infos:
+        actions_str = ", ".join(sorted(info["actions"])) if info["actions"] else "-"
+        if len(actions_str) > 35:
+            actions_str = actions_str[:32] + "..."
+
+        audio_refs = info["media_refs"]
+        if len(audio_refs) == 0:
+            audio_str = "[]"
+        elif len(audio_refs) <= 3:
+            audio_str = f"[{', '.join(str(m) for m in sorted(audio_refs))}]"
+        else:
+            sorted_refs = sorted(audio_refs)
+            audio_str = f"[{sorted_refs[0]}..{sorted_refs[-1]}] ({len(audio_refs)})"
+
+        click.echo(
+            f"{info['oid']:<8} {info['line_count']:<6} {actions_str:<35} {audio_str}"
+        )
+
+
+def _analyze_script(oid: int, lines: list) -> dict:
+    """Analyze a script and extract summary info."""
+    actions: set[str] = set()
+    media_refs: set[int] = set()
+    registers: set[int] = set()
+
+    for line in lines:
+        # Collect audio links
+        media_refs.update(line.audio_links)
+
+        # Analyze conditions for register usage
+        for cond in line.conditions:
+            if cond.left.is_register:
+                registers.add(cond.left.raw)
+            if cond.right.is_register:
+                registers.add(cond.right.raw)
+
+        # Analyze actions
+        for act in line.actions:
+            actions.add(act.kind.value)
+
+            # Track register usage in actions
+            if act.register != 0:
+                registers.add(act.register)
+
+            # Extract register references from payloads
+            if act.payload is not None:
+                if hasattr(act.payload, "is_register") and act.payload.is_register:
+                    registers.add(act.payload.raw)
+                elif isinstance(act.payload, tuple) and len(act.payload) == 3:
+                    # Arithmetic: (op, reg, value)
+                    _, reg, val = act.payload
+                    registers.add(reg)
+                    if hasattr(val, "is_register") and val.is_register:
+                        registers.add(val.raw)
+
+    return {
+        "oid": oid,
+        "line_count": len(lines),
+        "actions": actions,
+        "media_refs": media_refs,
+        "registers": registers,
+    }
+
+
+def _show_script_detail(parsed, oid: int) -> None:
+    """Show detailed info for a specific script."""
+    if oid not in parsed.scripts:
+        click.echo(f"OID {oid} not found (range: {parsed.first_oid}-{parsed.last_oid})")
+        raise SystemExit(1)
+
+    lines = parsed.scripts[oid]
+    if lines is None or len(lines) == 0:
+        click.echo(f"OID {oid}: no script (null pointer)")
+        return
+
+    click.echo(f"OID {oid}: {len(lines)} line(s)\n")
+
+    for i, line in enumerate(lines):
+        click.echo(f"  Line {i}:")
+
+        # Conditions
+        if line.conditions:
+            conds_str = " AND ".join(str(c) for c in line.conditions)
+            click.echo(f"    Conditions: {conds_str}")
+        else:
+            click.echo("    Conditions: (none)")
+
+        # Actions
+        if line.actions:
+            click.echo("    Actions:")
+            for act in line.actions:
+                click.echo(f"      - {_format_action_detail(act)}")
+        else:
+            click.echo("    Actions: (none)")
+
+        # Audio
+        if line.audio_links:
+            audio_str = ", ".join(str(m) for m in line.audio_links)
+            click.echo(f"    Audio: [{audio_str}]")
+        else:
+            click.echo("    Audio: (none)")
+
+        click.echo()
+
+
+def _format_action_detail(action) -> str:
+    """Format an action for detailed display."""
+    kind = action.kind.value
+    payload = action.payload
+
+    if action.kind.value == "Cancel":
+        return "Cancel"
+    if action.kind.value == "StartGame":
+        return f"StartGame({payload})"
+    if action.kind.value == "Jump":
+        return f"Jump(line {payload})"
+    if action.kind.value == "PlayMedia":
+        return f"PlayMedia(index {payload})"
+    if action.kind.value in ("PlayMediaRange", "PlayRandomInRange"):
+        if isinstance(payload, tuple):
+            return f"{kind}({payload[0]}-{payload[1]})"
+        return f"{kind}({payload})"
+    if action.kind.value == "SetTimer":
+        return f"SetTimer(${{action.register}}, {payload})"
+    if action.kind.value == "Arithmetic":
+        if isinstance(payload, tuple) and len(payload) == 3:
+            op, reg, val = payload
+            return f"${reg} {op} {val}"
+        return f"Arithmetic({payload})"
+    if action.kind.value == "NegateRegister":
+        return f"Negate(${action.register})"
+    if action.kind.value in ("PlayVariantRandom", "PlayVariantAll"):
+        return f"{kind}({payload})"
+
+    return f"{kind}({payload})"
+
+
+@cli.command("oids")
+@click.argument(
+    "gme_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+@click.argument("oid", type=int, required=False)
+@click.option("--game", type=int, help="Show OIDs used by this game (0-indexed)")
+def oids_cmd(gme_file: Path, oid: int | None, game: int | None) -> None:
+    """
+    Explore OIDs and their relationships in a GME file.
+
+    With no arguments, shows OID range summary.
+    With an OID argument, shows what that OID is used for.
+    Use --game to list OIDs used by a specific game.
+    """
+    parsed = tiptoi_tools.gme.parse_file(gme_file)
+
+    # If --game is specified, show OIDs for that game
+    if game is not None:
+        _show_game_oids(parsed, game)
+        return
+
+    # If a specific OID is requested, look it up
+    if oid is not None:
+        _lookup_oid(parsed, oid)
+        return
+
+    # Default: show OID range summary
+    _show_oid_summary(parsed)
+
+
+def _show_oid_summary(parsed) -> None:
+    """Show a summary of OID ranges and their usage."""
+    active_oids = [oid for oid, lines in parsed.scripts.items() if lines]
+    game_oids = _collect_game_oids(parsed)
+    special = parsed.special_oids
+
+    click.echo(f"OID Range: {parsed.first_oid}-{parsed.last_oid}")
+    click.echo(f"  Scripts: {len(active_oids)} OIDs with scripts")
+    if active_oids:
+        click.echo(f"    First: {min(active_oids)}, Last: {max(active_oids)}")
+    click.echo()
+
+    if special:
+        replay, stop = special
+        click.echo("Special OIDs:")
+        click.echo(f"  Replay: {replay}")
+        click.echo(f"  Stop: {stop}")
+        click.echo()
+
+    if game_oids:
+        click.echo(
+            f"Game OIDs ({len(game_oids)} total across {len(parsed.games)} game(s)):"
+        )
+        for game_idx, oids_by_type in game_oids.items():
+            game = parsed.games[game_idx]
+            type_name = _game_type_name(game.game_type)
+            total = sum(len(v) for v in oids_by_type.values())
+            click.echo(f"  Game {game_idx} ({type_name}): {total} OIDs")
+            for oid_type, oid_list in oids_by_type.items():
+                if oid_list:
+                    if len(oid_list) <= 5:
+                        oid_str = ", ".join(str(o) for o in oid_list)
+                    else:
+                        oid_str = (
+                            f"{min(oid_list)}-{max(oid_list)} ({len(oid_list)} OIDs)"
+                        )
+                    click.echo(f"    {oid_type}: {oid_str}")
+
+    # Find scripts that start games
+    game_starters = []
+    for script_oid, lines in parsed.scripts.items():
+        if lines is None:
+            continue
+        for line in lines:
+            for act in line.actions:
+                if act.kind.value == "StartGame":
+                    game_starters.append((script_oid, act.payload))
+
+    if game_starters:
+        click.echo()
+        click.echo("Scripts that start games:")
+        for script_oid, game_id in game_starters:
+            click.echo(f"  OID {script_oid} -> Game {game_id}")
+
+
+def _lookup_oid(parsed, oid: int) -> None:
+    """Look up what a specific OID is used for."""
+    click.echo(f"OID {oid}:\n")
+
+    found_something = False
+
+    # Check if it's the welcome OID
+    if oid == parsed.first_oid:
+        click.echo("  [Welcome OID] - First OID in range")
+        found_something = True
+
+    # Check special OIDs
+    if parsed.special_oids:
+        replay, stop = parsed.special_oids
+        if oid == replay:
+            click.echo("  [Special] Replay OID")
+            found_something = True
+        if oid == stop:
+            click.echo("  [Special] Stop OID")
+            found_something = True
+
+    # Check if it has a script
+    if oid in parsed.scripts:
+        lines = parsed.scripts[oid]
+        if lines:
+            click.echo(f"  [Script] {len(lines)} line(s)")
+            info = _analyze_script(oid, lines)
+            if info["actions"]:
+                click.echo(f"    Actions: {', '.join(sorted(info['actions']))}")
+            if info["media_refs"]:
+                refs = sorted(info["media_refs"])
+                if len(refs) <= 5:
+                    click.echo(f"    Audio: {refs}")
+                else:
+                    click.echo(f"    Audio: {refs[0]}-{refs[-1]} ({len(refs)} files)")
+
+            # Check if this script starts a game
+            for line in lines:
+                for act in line.actions:
+                    if act.kind.value == "StartGame":
+                        game_id = act.payload
+                        if 0 <= game_id < len(parsed.games):
+                            game = parsed.games[game_id]
+                            type_name = _game_type_name(game.game_type)
+                            click.echo(f"    Starts: Game {game_id} ({type_name})")
+            found_something = True
+        else:
+            click.echo("  [Script] Null pointer (no script)")
+            found_something = True
+
+    # Check if it's used in any game
+    game_refs = _find_oid_in_games(parsed, oid)
+    if game_refs:
+        for ref in game_refs:
+            click.echo(f"  [Game {ref['game']}] {ref['context']}")
+        found_something = True
+
+    if not found_something:
+        if parsed.first_oid <= oid <= parsed.last_oid:
+            click.echo("  Not found in scripts or games (within OID range)")
+        else:
+            click.echo(f"  Outside OID range ({parsed.first_oid}-{parsed.last_oid})")
+
+
+def _show_game_oids(parsed, game_idx: int) -> None:
+    """Show all OIDs used by a specific game."""
+    if game_idx < 0 or game_idx >= len(parsed.games):
+        click.echo(f"Game {game_idx} not found (0-{len(parsed.games) - 1} available)")
+        raise SystemExit(1)
+
+    game = parsed.games[game_idx]
+    type_name = _game_type_name(game.game_type)
+    click.echo(f"Game {game_idx}: {type_name} (type {game.game_type})\n")
+
+    if game.game_type == 253:
+        click.echo("  (Special game type with no OIDs)")
+        return
+
+    f = game.fields
+
+    # Game-level OIDs
+    if oids := f.get("gGameSelectOIDs"):
+        click.echo(f"  GameSelectOIDs: {' '.join(str(o) for o in oids)}")
+
+    if oids := f.get("gExtraOIDs"):
+        click.echo(f"  ExtraOIDs: {' '.join(str(o) for o in oids)}")
+
+    # Subgame OIDs
+    if subgames := f.get("gSubgames"):
+        click.echo(f"\n  Subgames ({len(subgames)}):")
+        for i, sg in enumerate(subgames):
+            has_oids = sg.oid1s or sg.oid2s or sg.oid3s
+            if has_oids:
+                click.echo(f"    Subgame {i}:")
+                if sg.oid1s:
+                    oids_str = _format_oid_list(sg.oid1s)
+                    click.echo(f"      oid1s: {oids_str}")
+                if sg.oid2s:
+                    oids_str = _format_oid_list(sg.oid2s)
+                    click.echo(f"      oid2s: {oids_str}")
+                if sg.oid3s:
+                    oids_str = _format_oid_list(sg.oid3s)
+                    click.echo(f"      oid3s: {oids_str}")
+
+
+def _format_oid_list(oids: list[int]) -> str:
+    """Format a list of OIDs for display."""
+    if not oids:
+        return "(none)"
+    if len(oids) <= 8:
+        return " ".join(str(o) for o in oids)
+    return f"{oids[0]}-{oids[-1]} ({len(oids)} OIDs)"
+
+
+def _collect_game_oids(parsed) -> dict[int, dict[str, list[int]]]:
+    """Collect all OIDs used by games."""
+    result: dict[int, dict[str, list[int]]] = {}
+
+    for i, game in enumerate(parsed.games):
+        if game.game_type == 253:
+            continue
+
+        oids_by_type: dict[str, list[int]] = {}
+        f = game.fields
+
+        if oids := f.get("gGameSelectOIDs"):
+            oids_by_type["GameSelectOIDs"] = list(oids)
+
+        if oids := f.get("gExtraOIDs"):
+            oids_by_type["ExtraOIDs"] = list(oids)
+
+        # Collect subgame OIDs
+        all_oid1s: list[int] = []
+        all_oid2s: list[int] = []
+        all_oid3s: list[int] = []
+
+        if subgames := f.get("gSubgames"):
+            for sg in subgames:
+                all_oid1s.extend(sg.oid1s)
+                all_oid2s.extend(sg.oid2s)
+                all_oid3s.extend(sg.oid3s)
+
+        if all_oid1s:
+            oids_by_type["Subgame oid1s"] = all_oid1s
+        if all_oid2s:
+            oids_by_type["Subgame oid2s"] = all_oid2s
+        if all_oid3s:
+            oids_by_type["Subgame oid3s"] = all_oid3s
+
+        if oids_by_type:
+            result[i] = oids_by_type
+
+    return result
+
+
+def _find_oid_in_games(parsed, target_oid: int) -> list[dict]:
+    """Find all references to an OID in game structures."""
+    refs = []
+
+    for i, game in enumerate(parsed.games):
+        if game.game_type == 253:
+            continue
+
+        f = game.fields
+
+        if (oids := f.get("gGameSelectOIDs")) and target_oid in oids:
+            idx = list(oids).index(target_oid)
+            refs.append({"game": i, "context": f"GameSelectOID[{idx}]"})
+
+        if (oids := f.get("gExtraOIDs")) and target_oid in oids:
+            idx = list(oids).index(target_oid)
+            refs.append({"game": i, "context": f"ExtraOID[{idx}]"})
+
+        if subgames := f.get("gSubgames"):
+            for sg_idx, sg in enumerate(subgames):
+                if target_oid in sg.oid1s:
+                    idx = sg.oid1s.index(target_oid)
+                    refs.append(
+                        {"game": i, "context": f"Subgame[{sg_idx}].oid1s[{idx}]"}
+                    )
+                if target_oid in sg.oid2s:
+                    idx = sg.oid2s.index(target_oid)
+                    refs.append(
+                        {"game": i, "context": f"Subgame[{sg_idx}].oid2s[{idx}]"}
+                    )
+                if target_oid in sg.oid3s:
+                    idx = sg.oid3s.index(target_oid)
+                    refs.append(
+                        {"game": i, "context": f"Subgame[{sg_idx}].oid3s[{idx}]"}
+                    )
+
+    return refs
