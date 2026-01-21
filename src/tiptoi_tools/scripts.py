@@ -88,6 +88,8 @@ class ScriptTable:
     first_oid: int
     last_oid: int
     scripts: dict[int, list[ScriptLine] | None]
+    active_oids: list[int]
+    game_starters: list[tuple[int, int]]  # (script_oid, game_id)
 
 
 # Binary opcodes for comparison operators
@@ -170,7 +172,9 @@ def decode(data: bytes, offset: int) -> ScriptTable:
     OIDs with no script (null pointer) map to None.
     """
     if offset <= 0 or offset + 8 > len(data):
-        return ScriptTable(first_oid=0, last_oid=0, scripts={})
+        return ScriptTable(
+            first_oid=0, last_oid=0, scripts={}, active_oids=[], game_starters=[]
+        )
 
     r = ScriptReader(data, offset)
     last_code = r.u16()
@@ -190,7 +194,24 @@ def decode(data: bytes, offset: int) -> ScriptTable:
         else:
             scripts[oid] = _decode_script(data, ptr)
 
-    return ScriptTable(first_oid=first_code, last_oid=last_code, scripts=scripts)
+    # Precompute active_oids and game_starters
+    active_oids: list[int] = []
+    game_starters: list[tuple[int, int]] = []
+    for oid, lines in scripts.items():
+        if lines:
+            active_oids.append(oid)
+            for line in lines:
+                for act in line.actions:
+                    if act.kind == ActionKind.START_GAME:
+                        game_starters.append((oid, int(act.payload)))
+
+    return ScriptTable(
+        first_oid=first_code,
+        last_oid=last_code,
+        scripts=scripts,
+        active_oids=active_oids,
+        game_starters=game_starters,
+    )
 
 
 def _decode_script(data: bytes, offset: int) -> list[ScriptLine]:

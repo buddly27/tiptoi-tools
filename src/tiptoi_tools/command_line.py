@@ -61,8 +61,7 @@ def info_cmd(gme_file: Path) -> None:
         click.echo(f"Special OIDs: replay={replay}, stop={stop}")
 
     click.echo("")
-    active_scripts = sum(1 for v in parsed.script_table.scripts.values() if v)
-    click.echo(f"Scripts: {active_scripts} present")
+    click.echo(f"Scripts: {len(parsed.script_table.active_oids)} present")
     st = parsed.script_table
     click.echo(f"OID range: {st.first_oid}-{st.last_oid}")
     click.echo(f"Games: {len(parsed.games)} total")
@@ -204,7 +203,7 @@ def play_cmd(
 
     # Check if OID exists
     if oid not in parsed.script_table.scripts:
-        available = sorted(k for k, v in parsed.script_table.scripts.items() if v)
+        available = parsed.script_table.active_oids
         if available:
             click.echo(
                 f"OID {oid} not found. Available OIDs: {available[0]}-{available[-1]}"
@@ -619,7 +618,7 @@ def oids_cmd(gme_file: Path, oid: int | None, game: int | None) -> None:
 
 def _show_oid_summary(parsed) -> None:
     """Show a summary of OID ranges and their usage."""
-    active_oids = [oid for oid, lines in parsed.script_table.scripts.items() if lines]
+    active_oids = parsed.script_table.active_oids
     game_oids = _collect_game_oids(parsed)
     special = parsed.special_oids
 
@@ -656,20 +655,10 @@ def _show_oid_summary(parsed) -> None:
                         )
                     click.echo(f"    {oid_type}: {oid_str}")
 
-    # Find scripts that start games
-    game_starters = []
-    for script_oid, lines in parsed.script_table.scripts.items():
-        if lines is None:
-            continue
-        for line in lines:
-            for act in line.actions:
-                if act.kind.value == "StartGame":
-                    game_starters.append((script_oid, act.payload))
-
-    if game_starters:
+    if parsed.script_table.game_starters:
         click.echo()
         click.echo("Scripts that start games:")
-        for script_oid, game_id in game_starters:
+        for script_oid, game_id in parsed.script_table.game_starters:
             click.echo(f"  OID {script_oid} -> Game {game_id}")
 
 
