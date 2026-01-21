@@ -286,6 +286,79 @@ def play_cmd(
     click.echo("Done.")
 
 
+@cli.command("games")
+@click.argument(
+    "gme_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+@click.option("-v", "--verbose", is_flag=True, help="Show detailed subgame info")
+def games_cmd(gme_file: Path, verbose: bool) -> None:
+    """List games and their structure."""
+    parsed = tiptoi_tools.gme.parse_file(gme_file)
+
+    if not parsed.games:
+        click.echo("No games found.")
+        return
+
+    click.echo(f"Found {len(parsed.games)} game(s):\n")
+
+    for i, game in enumerate(parsed.games, start=1):
+        type_name = _game_type_name(game.game_type)
+        click.echo(f"Game #{i}: {type_name} (type {game.game_type})")
+
+        if game.game_type == 253:
+            continue
+
+        f = game.fields
+        subgame_count = f.get("gSubgameCount", 0)
+        rounds = f.get("gRounds", 0)
+        click.echo(f"  Subgames: {subgame_count}")
+        click.echo(f"  Rounds: {rounds}")
+
+        if verbose and (subs := f.get("gSubgames")):
+            for j, sg in enumerate(subs, start=1):
+                n1, n2, n3 = len(sg.oid1s), len(sg.oid2s), len(sg.oid3s)
+                click.echo(f"    Subgame #{j}:")
+                click.echo(f"      OIDs: {n1}/{n2}/{n3} (oid1s/oid2s/oid3s)")
+
+                if sg.oid1s:
+                    oids = " ".join(str(o) for o in sg.oid1s)
+                    click.echo(f"        oid1s: {oids}")
+                if sg.oid2s:
+                    oids = " ".join(str(o) for o in sg.oid2s)
+                    click.echo(f"        oid2s: {oids}")
+                if sg.oid3s:
+                    oids = " ".join(str(o) for o in sg.oid3s)
+                    click.echo(f"        oid3s: {oids}")
+
+                total_entries = sum(len(pl) for pl in sg.playlists)
+                n_pl = len(sg.playlists)
+                click.echo(f"      Playlists: {n_pl} ({total_entries} entries)")
+
+                for k, pl in enumerate(sg.playlists):
+                    if pl:
+                        media_ids = [m for entry in pl for m in entry]
+                        media_str = ",".join(str(m) for m in media_ids[:10])
+                        if len(media_ids) > 10:
+                            media_str += f"... (+{len(media_ids) - 10} more)"
+                        click.echo(f"        [{k}]: {len(pl)} -> media {media_str}")
+
+        click.echo()
+
+
+def _game_type_name(game_type: int) -> str:
+    """Return a human-readable name for a game type."""
+    return {
+        1: "Common",
+        6: "Bonus",
+        7: "Grouped",
+        8: "Select",
+        9: "Extra9",
+        10: "Extra10",
+        16: "Extra16",
+        253: "Special",
+    }.get(game_type, "Unknown")
+
+
 def _print_audio_xors(entries: list[tiptoi_tools.gme.MediaEntry]) -> str:
     xors = sorted({e.magic_xor for e in entries})
     if not xors:
