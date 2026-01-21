@@ -2,6 +2,7 @@ from pathlib import Path
 
 import click
 
+import tiptoi_tools.audio
 import tiptoi_tools.gme
 import tiptoi_tools.media
 
@@ -148,6 +149,139 @@ def export_cmd(gme_file: Path, out_file: Path | None, media_path: str | None) ->
 
     tiptoi_tools.gme.export_yaml(parsed, out_file, media_path=media_path)
     click.echo(f"Wrote {out_file}")
+
+
+@cli.command("play")
+@click.argument(
+    "gme_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+@click.argument("oid", type=int)
+@click.option(
+    "--all",
+    "play_all",
+    is_flag=True,
+    help="Play all audio from all script lines (not just the first)",
+)
+@click.option(
+    "--line",
+    "line_index",
+    type=int,
+    default=None,
+    help="Play audio from a specific script line (0-indexed)",
+)
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Show audio player output for debugging",
+)
+@click.option(
+    "--save",
+    "save_dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Save audio files to this directory instead of playing",
+)
+def play_cmd(
+    gme_file: Path,
+    oid: int,
+    play_all: bool,
+    line_index: int | None,
+    verbose: bool,
+    save_dir: Path | None,
+) -> None:
+    """
+    Play audio associated with an OID code.
+
+    Looks up the script for the given OID and plays the associated audio files.
+    By default plays audio from the first script line.
+    """
+    parsed = tiptoi_tools.gme.parse_file(gme_file)
+    hdr = parsed.header
+
+    # Check if OID exists
+    if oid not in parsed.scripts:
+        available = sorted(k for k, v in parsed.scripts.items() if v)
+        if available:
+            click.echo(
+                f"OID {oid} not found. Available OIDs: {available[0]}-{available[-1]}"
+            )
+        else:
+            click.echo(f"OID {oid} not found. No scripts in this file.")
+        raise SystemExit(1)
+
+    script_lines = parsed.scripts[oid]
+    if script_lines is None or len(script_lines) == 0:
+        click.echo(f"OID {oid} has no script (null pointer)")
+        raise SystemExit(1)
+
+    # Determine which lines to play
+    if line_index is not None:
+        if line_index < 0 or line_index >= len(script_lines):
+            n = len(script_lines)
+            click.echo(f"Line {line_index} out of range. OID {oid} has {n} line(s).")
+            raise SystemExit(1)
+        lines_to_play = [script_lines[line_index]]
+    elif play_all:
+        lines_to_play = script_lines
+    else:
+        lines_to_play = [script_lines[0]]
+
+    # Collect all unique media indices
+    media_indices: list[int] = []
+    for line in lines_to_play:
+        for idx in line.audio_links:
+            if idx not in media_indices:
+                media_indices.append(idx)
+
+    if not media_indices:
+        click.echo(f"OID {oid} has no audio links")
+        raise SystemExit(1)
+
+    # Load GME data for media extraction
+    data = gme_file.read_bytes()
+    # Fallback XOR key from header (used when per-entry detection fails)
+    header_xor = (hdr.raw_xor & 0xFF) ^ 0xFF
+
+    if save_dir:
+        save_dir.mkdir(parents=True, exist_ok=True)
+        n = len(media_indices)
+        click.echo(f"OID {oid}: saving {n} audio file(s) to {save_dir}")
+    else:
+        click.echo(f"OID {oid}: {len(media_indices)} audio file(s) to play")
+        click.echo(f"Audio player: {tiptoi_tools.audio.get_player_info()}")
+
+    for idx in media_indices:
+        if idx < 0 or idx >= len(parsed.media_entries):
+            click.echo(f"  [{idx}] Invalid media index (skipping)")
+            continue
+
+        entry = parsed.media_entries[idx]
+        if entry.length == 0:
+            click.echo(f"  [{idx}] Empty media entry (skipping)")
+            continue
+
+        enc = data[entry.offset : entry.offset + entry.length]
+        dec = tiptoi_tools.media.decrypt_media(enc, entry.magic_xor)
+        ext = tiptoi_tools.media.guess_extension(dec)
+
+        if verbose:
+            hdr_bytes = dec[:16].hex() if len(dec) >= 16 else dec.hex()
+            click.echo(f"    XOR key: 0x{entry.magic_xor:02X}, header: {hdr_bytes}")
+
+        if save_dir:
+            out_path = save_dir / f"{idx:04d}{ext}"
+            out_path.write_bytes(dec)
+            click.echo(f"  [{idx}] Saved to {out_path} ({entry.length} bytes)")
+        else:
+            click.echo(f"  [{idx}] Playing ({entry.length} bytes, {ext})...")
+            try:
+                tiptoi_tools.audio.play_audio(dec, verbose=verbose)
+            except tiptoi_tools.audio.AudioPlaybackError as e:
+                click.echo(f"    Error: {e}")
+                raise SystemExit(1) from None
+
+    click.echo("Done.")
 
 
 def _print_welcome(welcome_sounds: list[list[int]]) -> str:
