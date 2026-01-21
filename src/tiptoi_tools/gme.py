@@ -89,6 +89,8 @@ class ParsedGme:
     binary_tables_entries: tuple[int, int, int]
     single_binary_tables_entries: tuple[int, int, int]
     special_oids: tuple[int, int] | None
+    first_oid: int
+    last_oid: int
     scripts: dict[int, list[ScriptLine] | None]
     games: list[Game]
     checksum_found: int
@@ -140,7 +142,7 @@ def decode(data: bytes) -> ParsedGme:
 
     special_oids = _decode_special_oids(data, OFFSET_SPECIAL_OIDS)
 
-    scripts = decode_scripts(data, header.script_table_offset)
+    script_table = decode_scripts(data, header.script_table_offset)
     games = decode_games(data, header.game_table_offset)
 
     checksum_found = u32le(data, len(data) - 4)
@@ -155,7 +157,9 @@ def decode(data: bytes) -> ParsedGme:
         binary_tables_entries=binary_tables_entries,
         single_binary_tables_entries=single_binary_tables_entries,
         special_oids=special_oids,
-        scripts=scripts,
+        first_oid=script_table.first_oid,
+        last_oid=script_table.last_oid,
+        scripts=script_table.scripts,
         games=games,
         checksum_found=checksum_found,
         checksum_calculated=checksum_calculated,

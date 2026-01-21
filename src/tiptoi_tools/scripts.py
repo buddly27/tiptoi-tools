@@ -152,15 +152,25 @@ class ScriptReader(BinaryReader):
         return value.raw
 
 
-def decode(data: bytes, offset: int) -> dict[int, list[ScriptLine] | None]:
+@dataclass(frozen=True)
+class ScriptTable:
+    """Decoded script table with OID range and scripts."""
+
+    first_oid: int
+    last_oid: int
+    scripts: dict[int, list[ScriptLine] | None]
+
+
+def decode(data: bytes, offset: int) -> ScriptTable:
     """
     Decode the script table from GME binary data.
 
-    Returns a mapping from OID (object identifier) to its script lines.
+    Returns a ScriptTable containing the OID range and a mapping from
+    OID (object identifier) to its script lines.
     OIDs with no script (null pointer) map to None.
     """
     if offset <= 0 or offset + 8 > len(data):
-        return {}
+        return ScriptTable(first_oid=0, last_oid=0, scripts={})
 
     r = ScriptReader(data, offset)
     last_code = r.u16()
@@ -172,14 +182,15 @@ def decode(data: bytes, offset: int) -> dict[int, list[ScriptLine] | None]:
     if r.offset + 4 * count > len(data):
         count = max(0, (len(data) - r.offset) // 4)
 
-    out: dict[int, list[ScriptLine] | None] = {}
+    scripts: dict[int, list[ScriptLine] | None] = {}
     for i, ptr in enumerate(r.u32_array(count)):
         oid = first_code + i
         if ptr in (0x00000000, 0xFFFFFFFF) or ptr >= len(data):
-            out[oid] = None
+            scripts[oid] = None
         else:
-            out[oid] = _decode_script(data, ptr)
-    return out
+            scripts[oid] = _decode_script(data, ptr)
+
+    return ScriptTable(first_oid=first_code, last_oid=last_code, scripts=scripts)
 
 
 def _decode_script(data: bytes, offset: int) -> list[ScriptLine]:

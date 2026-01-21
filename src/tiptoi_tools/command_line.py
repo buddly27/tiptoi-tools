@@ -43,7 +43,7 @@ def info_cmd(gme_file: Path) -> None:
     click.echo("  init: " + (tiptoi_tools.gme.serialize(parsed).get("init") or ""))
     click.echo("")
 
-    click.echo(f"Initial sounds: {_print_welcome(parsed.welcome_sounds)}")
+    click.echo(f"Welcome OID: {parsed.first_oid}")
     click.echo(f"Audio table entries: {len(parsed.media_entries)}")
     click.echo(f"Audio table copy: {parsed.duplicated_table.value}")
     click.echo(f"Audio XOR values: {_print_audio_xors(parsed.media_entries)}")
@@ -61,7 +61,9 @@ def info_cmd(gme_file: Path) -> None:
         click.echo(f"Special OIDs: replay={replay}, stop={stop}")
 
     click.echo("")
-    click.echo(f"Scripts: {sum(1 for v in parsed.scripts.values() if v)} present")
+    active_scripts = sum(1 for v in parsed.scripts.values() if v)
+    click.echo(f"Scripts: {active_scripts} present")
+    click.echo(f"OID range: {parsed.first_oid}-{parsed.last_oid}")
     click.echo(f"Games: {len(parsed.games)} total")
     click.echo("")
     found = parsed.checksum_found
@@ -282,15 +284,6 @@ def play_cmd(
                 raise SystemExit(1) from None
 
     click.echo("Done.")
-
-
-def _print_welcome(welcome_sounds: list[list[int]]) -> str:
-    if not welcome_sounds:
-        return "[]"
-    if len(welcome_sounds) == 1:
-        return ",".join(str(x) for x in welcome_sounds[0])
-    inner = "; ".join(",".join(str(x) for x in pl) for pl in welcome_sounds)
-    return "[" + inner + "]"
 
 
 def _print_audio_xors(entries: list[tiptoi_tools.gme.MediaEntry]) -> str:
