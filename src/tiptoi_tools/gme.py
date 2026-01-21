@@ -13,7 +13,7 @@ from tiptoi_tools.media import MediaEntry
 from tiptoi_tools.media import decode as decode_media_entries
 from tiptoi_tools.playlist import decode_table as decode_playlist_table
 from tiptoi_tools.playlist import serialize as serialize_playlist
-from tiptoi_tools.scripts import ScriptLine
+from tiptoi_tools.scripts import ScriptTable
 from tiptoi_tools.scripts import decode as decode_scripts
 from tiptoi_tools.scripts import serialize as serialize_scripts
 
@@ -89,9 +89,7 @@ class ParsedGme:
     binary_tables_entries: tuple[int, int, int]
     single_binary_tables_entries: tuple[int, int, int]
     special_oids: tuple[int, int] | None
-    first_oid: int
-    last_oid: int
-    scripts: dict[int, list[ScriptLine] | None]
+    script_table: ScriptTable
     games: list[Game]
     checksum_found: int
     checksum_calculated: int
@@ -157,9 +155,7 @@ def decode(data: bytes) -> ParsedGme:
         binary_tables_entries=binary_tables_entries,
         single_binary_tables_entries=single_binary_tables_entries,
         special_oids=special_oids,
-        first_oid=script_table.first_oid,
-        last_oid=script_table.last_oid,
-        scripts=script_table.scripts,
+        script_table=script_table,
         games=games,
         checksum_found=checksum_found,
         checksum_calculated=checksum_calculated,
@@ -186,7 +182,7 @@ def serialize(
         "welcome": welcome,
         "media-path": media_path,
         "init": _serialize_init(parsed.registers),
-        "scripts": serialize_scripts(parsed.scripts),
+        "scripts": serialize_scripts(parsed.script_table.scripts),
         "games": [serialize_game(g) for g in parsed.games],
     }
 

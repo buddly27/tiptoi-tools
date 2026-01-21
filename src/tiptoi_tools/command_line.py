@@ -43,7 +43,7 @@ def info_cmd(gme_file: Path) -> None:
     click.echo("  init: " + (tiptoi_tools.gme.serialize(parsed).get("init") or ""))
     click.echo("")
 
-    click.echo(f"Welcome OID: {parsed.first_oid}")
+    click.echo(f"Welcome OID: {parsed.script_table.first_oid}")
     click.echo(f"Audio table entries: {len(parsed.media_entries)}")
     click.echo(f"Audio table copy: {parsed.duplicated_table.value}")
     click.echo(f"Audio XOR values: {_print_audio_xors(parsed.media_entries)}")
@@ -61,9 +61,10 @@ def info_cmd(gme_file: Path) -> None:
         click.echo(f"Special OIDs: replay={replay}, stop={stop}")
 
     click.echo("")
-    active_scripts = sum(1 for v in parsed.scripts.values() if v)
+    active_scripts = sum(1 for v in parsed.script_table.scripts.values() if v)
     click.echo(f"Scripts: {active_scripts} present")
-    click.echo(f"OID range: {parsed.first_oid}-{parsed.last_oid}")
+    st = parsed.script_table
+    click.echo(f"OID range: {st.first_oid}-{st.last_oid}")
     click.echo(f"Games: {len(parsed.games)} total")
     click.echo("")
     found = parsed.checksum_found
@@ -202,8 +203,8 @@ def play_cmd(
     hdr = parsed.header
 
     # Check if OID exists
-    if oid not in parsed.scripts:
-        available = sorted(k for k, v in parsed.scripts.items() if v)
+    if oid not in parsed.script_table.scripts:
+        available = sorted(k for k, v in parsed.script_table.scripts.items() if v)
         if available:
             click.echo(
                 f"OID {oid} not found. Available OIDs: {available[0]}-{available[-1]}"
@@ -212,7 +213,7 @@ def play_cmd(
             click.echo(f"OID {oid} not found. No scripts in this file.")
         raise SystemExit(1)
 
-    script_lines = parsed.scripts[oid]
+    script_lines = parsed.script_table.scripts[oid]
     if script_lines is None or len(script_lines) == 0:
         click.echo(f"OID {oid} has no script (null pointer)")
         raise SystemExit(1)
@@ -401,7 +402,7 @@ def scripts_cmd(
 
     # Build list of scripts with their properties
     script_infos = []
-    for script_oid, lines in parsed.scripts.items():
+    for script_oid, lines in parsed.script_table.scripts.items():
         if lines is None or len(lines) == 0:
             continue
         info = _analyze_script(script_oid, lines)
@@ -441,7 +442,7 @@ def scripts_cmd(
         return
 
     # Display results
-    oid_range = f"{parsed.first_oid}-{parsed.last_oid}"
+    oid_range = f"{parsed.script_table.first_oid}-{parsed.script_table.last_oid}"
     click.echo(f"OID Range: {oid_range} ({len(script_infos)} scripts)\n")
 
     # Header
@@ -514,11 +515,12 @@ def _analyze_script(oid: int, lines: list) -> dict:
 
 def _show_script_detail(parsed, oid: int) -> None:
     """Show detailed info for a specific script."""
-    if oid not in parsed.scripts:
-        click.echo(f"OID {oid} not found (range: {parsed.first_oid}-{parsed.last_oid})")
+    st = parsed.script_table
+    if oid not in st.scripts:
+        click.echo(f"OID {oid} not found (range: {st.first_oid}-{st.last_oid})")
         raise SystemExit(1)
 
-    lines = parsed.scripts[oid]
+    lines = parsed.script_table.scripts[oid]
     if lines is None or len(lines) == 0:
         click.echo(f"OID {oid}: no script (null pointer)")
         return
@@ -617,11 +619,12 @@ def oids_cmd(gme_file: Path, oid: int | None, game: int | None) -> None:
 
 def _show_oid_summary(parsed) -> None:
     """Show a summary of OID ranges and their usage."""
-    active_oids = [oid for oid, lines in parsed.scripts.items() if lines]
+    active_oids = [oid for oid, lines in parsed.script_table.scripts.items() if lines]
     game_oids = _collect_game_oids(parsed)
     special = parsed.special_oids
 
-    click.echo(f"OID Range: {parsed.first_oid}-{parsed.last_oid}")
+    st = parsed.script_table
+    click.echo(f"OID Range: {st.first_oid}-{st.last_oid}")
     click.echo(f"  Scripts: {len(active_oids)} OIDs with scripts")
     if active_oids:
         click.echo(f"    First: {min(active_oids)}, Last: {max(active_oids)}")
@@ -655,7 +658,7 @@ def _show_oid_summary(parsed) -> None:
 
     # Find scripts that start games
     game_starters = []
-    for script_oid, lines in parsed.scripts.items():
+    for script_oid, lines in parsed.script_table.scripts.items():
         if lines is None:
             continue
         for line in lines:
@@ -677,7 +680,7 @@ def _lookup_oid(parsed, oid: int) -> None:
     found_something = False
 
     # Check if it's the welcome OID
-    if oid == parsed.first_oid:
+    if oid == parsed.script_table.first_oid:
         click.echo("  [Welcome OID] - First OID in range")
         found_something = True
 
@@ -692,8 +695,8 @@ def _lookup_oid(parsed, oid: int) -> None:
             found_something = True
 
     # Check if it has a script
-    if oid in parsed.scripts:
-        lines = parsed.scripts[oid]
+    if oid in parsed.script_table.scripts:
+        lines = parsed.script_table.scripts[oid]
         if lines:
             click.echo(f"  [Script] {len(lines)} line(s)")
             info = _analyze_script(oid, lines)
@@ -728,10 +731,11 @@ def _lookup_oid(parsed, oid: int) -> None:
         found_something = True
 
     if not found_something:
-        if parsed.first_oid <= oid <= parsed.last_oid:
+        st = parsed.script_table
+        if st.first_oid <= oid <= st.last_oid:
             click.echo("  Not found in scripts or games (within OID range)")
         else:
-            click.echo(f"  Outside OID range ({parsed.first_oid}-{parsed.last_oid})")
+            click.echo(f"  Outside OID range ({st.first_oid}-{st.last_oid})")
 
 
 def _show_game_oids(parsed, game_idx: int) -> None:

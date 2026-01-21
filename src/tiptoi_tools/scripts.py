@@ -81,6 +81,15 @@ class ScriptLine:
     audio_links: list[int]
 
 
+@dataclass(frozen=True)
+class ScriptTable:
+    """Decoded script table with OID range and scripts."""
+
+    first_oid: int
+    last_oid: int
+    scripts: dict[int, list[ScriptLine] | None]
+
+
 # Binary opcodes for comparison operators
 _COMPARE_OPS: dict[bytes, CompareOp] = {
     b"\xf9\xff": CompareOp.EQ,
@@ -150,15 +159,6 @@ class ScriptReader(BinaryReader):
         if value.is_register:
             raise ValueError(f"Expected Const, got Reg at 0x{start:08X}")
         return value.raw
-
-
-@dataclass(frozen=True)
-class ScriptTable:
-    """Decoded script table with OID range and scripts."""
-
-    first_oid: int
-    last_oid: int
-    scripts: dict[int, list[ScriptLine] | None]
 
 
 def decode(data: bytes, offset: int) -> ScriptTable:
