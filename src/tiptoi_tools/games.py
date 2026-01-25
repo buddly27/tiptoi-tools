@@ -1,9 +1,9 @@
 from dataclasses import dataclass
 from typing import Any
 
-from tiptoi_tools.binary import BinaryReader
+from tiptoi_tools.binary import OID, BinaryReader
+from tiptoi_tools.playlist import PlaylistTable
 from tiptoi_tools.playlist import decode_table as decode_playlist_table
-from tiptoi_tools.playlist import serialize_table as serialize_playlist_table
 
 # Game type constants
 GAME_TYPE_COMMON = 1
@@ -88,26 +88,26 @@ class SubGame:
     """A subgame within a game, containing OID lists and playlists."""
 
     header: bytes
-    oid1s: list[int]
-    oid2s: list[int]
-    oid3s: list[int]
-    playlists: list[list[list[int]]]
+    oid1s: list[OID]
+    oid2s: list[OID]
+    oid3s: list[OID]
+    playlists: list[PlaylistTable]
 
 
 class GameReader(BinaryReader):
     """BinaryReader extended with game-specific parsing methods."""
 
-    def playlist(self) -> list[list[int]]:
+    def playlist(self) -> PlaylistTable:
         """Read a pointer and decode the playlist table at that location."""
         return decode_playlist_table(self.data, self.u32())
 
-    def playlists(self, count: int) -> list[list[list[int]]]:
+    def playlists(self, count: int) -> list[PlaylistTable]:
         """Read multiple playlist table pointers."""
         return [self.playlist() for _ in range(count)]
 
-    def oids(self) -> list[int]:
+    def oids(self) -> list[OID]:
         """Read an OID list via pointer indirection."""
-        return list(GameReader(self.data, self.u32()).u16_list())
+        return [OID(x) for x in GameReader(self.data, self.u32()).u16_list()]
 
     def game_ids(self) -> list[int]:
         """Read a game ID list (converts from 1-indexed to 0-indexed)."""
@@ -132,9 +132,9 @@ class GameReader(BinaryReader):
         r.skip(20)
         return SubGame(
             header=header,
-            oid1s=r.u16_list(),
-            oid2s=r.u16_list(),
-            oid3s=r.u16_list(),
+            oid1s=[OID(x) for x in r.u16_list()],
+            oid2s=[OID(x) for x in r.u16_list()],
+            oid3s=[OID(x) for x in r.u16_list()],
             playlists=[r.playlist() for _ in range(9)],
         )
 
@@ -258,12 +258,12 @@ def serialize(g: Game) -> dict[str, Any]:
     # Playlist fields (single playlist table)
     for yaml_key, field_key in _PLAYLIST_FIELDS:
         if (v := f.get(field_key)) is not None:
-            out[yaml_key] = serialize_playlist_table(v, collapse=True)
+            out[yaml_key] = v.serialize(collapse=True)
 
     # Playlist list fields (list of playlist tables)
     for yaml_key, field_key in _PLAYLIST_LIST_FIELDS:
         if (v := f.get(field_key)) is not None and v:
-            out[yaml_key] = [serialize_playlist_table(pl, collapse=True) for pl in v]
+            out[yaml_key] = [pl.serialize(collapse=True) for pl in v]
 
     # Subgames
     if (subgames := f.get("gSubgames")) is not None:
@@ -278,10 +278,10 @@ def serialize(g: Game) -> dict[str, Any]:
 def _serialize_subgame(sg: SubGame) -> dict[str, Any]:
     """Serialize a subgame to a dictionary for YAML output."""
 
-    def oid_str(xs: list[int]) -> str:
+    def oid_str(xs: list[OID]) -> str:
         return " ".join(str(x) for x in xs) if xs else ""
 
-    playlists = [serialize_playlist_table(pl, collapse=True) for pl in sg.playlists]
+    playlists = [pl.serialize(collapse=True) for pl in sg.playlists]
     return dict(
         sorted(
             {

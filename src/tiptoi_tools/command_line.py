@@ -199,7 +199,6 @@ def play_cmd(
     By default plays audio from the first script line.
     """
     parsed = tiptoi_tools.gme.parse_file(gme_file)
-    hdr = parsed.header
 
     # Check if OID exists
     if oid not in parsed.script_table.scripts:
@@ -240,10 +239,7 @@ def play_cmd(
         click.echo(f"OID {oid} has no audio links")
         raise SystemExit(1)
 
-    # Load GME data for media extraction
     data = gme_file.read_bytes()
-    # Fallback XOR key from header (used when per-entry detection fails)
-    header_xor = (hdr.raw_xor & 0xFF) ^ 0xFF
 
     if save_dir:
         save_dir.mkdir(parents=True, exist_ok=True)

@@ -1,4 +1,7 @@
 import struct
+from typing import NewType
+
+OID = NewType("OID", int)
 
 
 def u8(data: bytes, offset: int) -> int:

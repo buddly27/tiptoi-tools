@@ -5,14 +5,14 @@ from typing import Any
 
 import yaml
 
-from tiptoi_tools.binary import BinaryReader, ascii_clean, u8, u16le, u32le
+from tiptoi_tools.binary import OID, BinaryReader, ascii_clean, u8, u16le, u32le
 from tiptoi_tools.games import Game
 from tiptoi_tools.games import decode as decode_games
 from tiptoi_tools.games import serialize as serialize_game
 from tiptoi_tools.media import MediaEntry
 from tiptoi_tools.media import decode as decode_media_entries
+from tiptoi_tools.playlist import PlaylistTable
 from tiptoi_tools.playlist import decode_table as decode_playlist_table
-from tiptoi_tools.playlist import serialize as serialize_playlist
 from tiptoi_tools.scripts import ScriptTable
 from tiptoi_tools.scripts import decode as decode_scripts
 from tiptoi_tools.scripts import serialize as serialize_scripts
@@ -85,10 +85,10 @@ class ParsedGme:
     registers: list[int]
     media_entries: list[MediaEntry]
     duplicated_table: Similarity
-    welcome_sounds: list[list[int]]
+    welcome_sounds: PlaylistTable
     binary_tables_entries: tuple[int, int, int]
     single_binary_tables_entries: tuple[int, int, int]
-    special_oids: tuple[int, int] | None
+    special_oids: tuple[OID, OID] | None
     script_table: ScriptTable
     games: list[Game]
     checksum_found: int
@@ -123,7 +123,9 @@ def decode(data: bytes) -> ParsedGme:
         else 0
     )
     welcome_sounds = (
-        decode_playlist_table(data, welcome_offset) if welcome_offset else []
+        decode_playlist_table(data, welcome_offset)
+        if welcome_offset
+        else PlaylistTable(playlists=())
     )
 
     binary_tables_entries = (
@@ -170,11 +172,7 @@ def serialize(
     header = parsed.header
 
     # Welcome: single playlist -> string, multiple -> list
-    welcome: Any
-    if len(parsed.welcome_sounds) == 1:
-        welcome = serialize_playlist(parsed.welcome_sounds[0])
-    else:
-        welcome = [serialize_playlist(pl) for pl in parsed.welcome_sounds]
+    welcome = parsed.welcome_sounds.serialize(collapse=True)
 
     out: dict[str, Any] = {
         "product-id": int(header.product_id_code),
@@ -329,7 +327,7 @@ def _decode_ptr32_maybe(data: bytes, offset: int) -> int | None:
     return p
 
 
-def _decode_special_oids(data: bytes, offset: int) -> tuple[int, int] | None:
+def _decode_special_oids(data: bytes, offset: int) -> tuple[OID, OID] | None:
     """
     Decode replay/stop special OIDs from the header.
 
@@ -352,13 +350,13 @@ def _decode_special_oids(data: bytes, offset: int) -> tuple[int, int] | None:
         a, b = u16le(data, p), u16le(data, p + 2)
         # (0xFFFF, 0xFFFF) means unused, but (0, 0) is valid (no special OID)
         if (a, b) != (0xFFFF, 0xFFFF):
-            return a, b
+            return OID(a), OID(b)
 
     # Fall back to direct interpretation as two u16 values
     a, b = u16le(data, offset), u16le(data, offset + 2)
     is_unused = (a, b) == (0xFFFF, 0xFFFF)
     is_valid_oid_pair = a < _MAX_VALID_OID and b < _MAX_VALID_OID
     if not is_unused and is_valid_oid_pair:
-        return a, b
+        return OID(a), OID(b)
 
     return None

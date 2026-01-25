@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TypeAlias
 
-from tiptoi_tools.binary import BinaryReader, hi_u8, lo_u8
+from tiptoi_tools.binary import OID, BinaryReader, hi_u8, lo_u8
 
 
 @dataclass(frozen=True)
@@ -85,11 +85,11 @@ class ScriptLine:
 class ScriptTable:
     """Decoded script table with OID range and scripts."""
 
-    first_oid: int
-    last_oid: int
-    scripts: dict[int, list[ScriptLine] | None]
-    active_oids: list[int]
-    game_starters: list[tuple[int, int]]  # (script_oid, game_id)
+    first_oid: OID
+    last_oid: OID
+    scripts: dict[OID, list[ScriptLine] | None]
+    active_oids: list[OID]
+    game_starters: list[tuple[OID, int]]  # (script_oid, game_id)
 
 
 # Binary opcodes for comparison operators
@@ -173,7 +173,11 @@ def decode(data: bytes, offset: int) -> ScriptTable:
     """
     if offset <= 0 or offset + 8 > len(data):
         return ScriptTable(
-            first_oid=0, last_oid=0, scripts={}, active_oids=[], game_starters=[]
+            first_oid=OID(0),
+            last_oid=OID(0),
+            scripts={},
+            active_oids=[],
+            game_starters=[],
         )
 
     r = ScriptReader(data, offset)
@@ -186,17 +190,17 @@ def decode(data: bytes, offset: int) -> ScriptTable:
     if r.offset + 4 * count > len(data):
         count = max(0, (len(data) - r.offset) // 4)
 
-    scripts: dict[int, list[ScriptLine] | None] = {}
+    scripts: dict[OID, list[ScriptLine] | None] = {}
     for i, ptr in enumerate(r.u32_array(count)):
-        oid = first_code + i
+        oid = OID(first_code + i)
         if ptr in (0x00000000, 0xFFFFFFFF) or ptr >= len(data):
             scripts[oid] = None
         else:
             scripts[oid] = _decode_script(data, ptr)
 
     # Precompute active_oids and game_starters
-    active_oids: list[int] = []
-    game_starters: list[tuple[int, int]] = []
+    active_oids: list[OID] = []
+    game_starters: list[tuple[OID, int]] = []
     for oid, lines in scripts.items():
         if lines:
             active_oids.append(oid)
@@ -206,8 +210,8 @@ def decode(data: bytes, offset: int) -> ScriptTable:
                         game_starters.append((oid, int(act.payload)))
 
     return ScriptTable(
-        first_oid=first_code,
-        last_oid=last_code,
+        first_oid=OID(first_code),
+        last_oid=OID(last_code),
         scripts=scripts,
         active_oids=active_oids,
         game_starters=game_starters,
@@ -406,7 +410,8 @@ def _serialize_action(line: ScriptLine, action: Action) -> str:
     if kind == ActionKind.UNKNOWN:
         hexcode, reg_idx, val = payload
         hexbytes = bytes.fromhex(hexcode)
-        return f"?(${reg_idx},{_serialize_value(val)}) ({' '.join(f'{b:02X}' for b in hexbytes)})"
+        hex_str = " ".join(f"{b:02X}" for b in hexbytes)
+        return f"?(${reg_idx},{_serialize_value(val)}) ({hex_str})"
 
     return kind.value
 
