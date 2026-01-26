@@ -7,29 +7,67 @@ import tiptoi_tools.gme
 import tiptoi_tools.media
 
 
+class GmeContext:
+    """Context object holding the parsed GME file and raw data."""
+
+    def __init__(self, gme_file: Path):
+        self.gme_file = gme_file
+        self._parsed = None
+        self._data = None
+
+    @property
+    def parsed(self):
+        """Lazily parse the GME file."""
+        if self._parsed is None:
+            self._parsed = tiptoi_tools.gme.parse_file(self.gme_file)
+        return self._parsed
+
+    @property
+    def data(self) -> bytes:
+        """Lazily read the raw file data."""
+        if self._data is None:
+            self._data = self.gme_file.read_bytes()
+        return self._data
+
+
+pass_gme = click.make_pass_decorator(GmeContext)
+
+
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
     invoke_without_command=True,
 )
-@click.version_option(package_name="tiptoi-tools")
-@click.pass_context
-def cli(ctx: click.Context) -> None:
-    """Tools for working with Tiptoi GME files."""
-    if ctx.invoked_subcommand is None:
-        click.echo(ctx.get_help())
-
-
-@cli.command("info")
 @click.argument(
     "gme_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
 )
-def info_cmd(gme_file: Path) -> None:
-    """Print general information about a GME file."""
-    parsed = tiptoi_tools.gme.parse_file(gme_file)
+@click.version_option(package_name="tiptoi-tools")
+@click.pass_context
+def cli(ctx: click.Context, gme_file: Path) -> None:
+    """Tools for working with Tiptoi GME files.
+
+    Usage: tiptoi-tools <file.gme> <action> [options]
+
+    Examples:
+      tiptoi-tools file.gme info
+      tiptoi-tools file.gme play 123
+      tiptoi-tools file.gme play @1632
+      tiptoi-tools file.gme games -v
+    """
+    ctx.obj = GmeContext(gme_file)
+    if ctx.invoked_subcommand is None:
+        # Default to info if no subcommand given
+        ctx.invoke(info_cmd)
+
+
+@cli.command("info")
+@pass_gme
+def info_cmd(gme: GmeContext) -> None:
+    """Show general information about the GME file."""
+    parsed = gme.parsed
     hdr = parsed.header
 
-    click.echo(f"File: {gme_file}")
-    click.echo(f"Size: {gme_file.stat().st_size} bytes")
+    click.echo(f"File: {gme.gme_file}")
+    click.echo(f"Size: {gme.gme_file.stat().st_size} bytes")
     click.echo("")
     click.echo("Header:")
     click.echo(f"  Product id code:               {hdr.product_id_code}")
@@ -71,10 +109,7 @@ def info_cmd(gme_file: Path) -> None:
     click.echo(f"Checksum found 0x{found:08X}, calculated 0x{calc:08X}")
 
 
-@cli.command("media")
-@click.argument(
-    "gme_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
-)
+@cli.command("extract")
 @click.option(
     "--dir",
     "out_dir",
@@ -86,9 +121,10 @@ def info_cmd(gme_file: Path) -> None:
 @click.option(
     "--limit", type=int, default=None, help="Only extract first N media files"
 )
-def media_cmd(gme_file: Path, out_dir: Path, limit: int | None) -> None:
-    """Extract and decrypt media samples from a GME file."""
-    parsed = tiptoi_tools.gme.parse_file(gme_file)
+@pass_gme
+def extract_cmd(gme: GmeContext, out_dir: Path, limit: int | None) -> None:
+    """Extract and decrypt all media files from the GME."""
+    parsed = gme.parsed
     hdr = parsed.header
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -103,13 +139,12 @@ def media_cmd(gme_file: Path, out_dir: Path, limit: int | None) -> None:
         f"Found {len(entries)} media entries in table at 0x{hdr.media_table_offset:08X}"
     )
 
-    data = gme_file.read_bytes()
     count = 0
     for entry in entries:
         if limit is not None and count >= limit:
             break
 
-        enc = data[entry.offset : entry.offset + entry.length]
+        enc = gme.data[entry.offset : entry.offset + entry.length]
         dec = tiptoi_tools.media.decrypt_media(enc, entry.magic_xor)
         ext = tiptoi_tools.media.guess_extension(dec)
 
@@ -125,9 +160,6 @@ def media_cmd(gme_file: Path, out_dir: Path, limit: int | None) -> None:
 
 @cli.command("export")
 @click.argument(
-    "gme_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
-)
-@click.argument(
     "out_file", required=False, type=click.Path(dir_okay=False, path_type=Path)
 )
 @click.option(
@@ -135,37 +167,23 @@ def media_cmd(gme_file: Path, out_dir: Path, limit: int | None) -> None:
     default=None,
     help="Value for the 'media-path' field in YAML. Default: media/{stem}_%s",
 )
-def export_cmd(gme_file: Path, out_file: Path | None, media_path: str | None) -> None:
-    """
-    Dump the file in human-readable YAML format.
-
-    If OUT_FILE is omitted, writes <GME>.yaml next to the input file.
-    """
-    parsed = tiptoi_tools.gme.parse_file(gme_file)
+@pass_gme
+def export_cmd(gme: GmeContext, out_file: Path | None, media_path: str | None) -> None:
+    """Export the GME file to tttool-compatible YAML format."""
+    parsed = gme.parsed
 
     if out_file is None:
-        out_file = gme_file.with_suffix(".yaml")
+        out_file = gme.gme_file.with_suffix(".yaml")
 
     if media_path is None:
-        media_path = f"media/{gme_file.stem}_%s"
+        media_path = f"media/{gme.gme_file.stem}_%s"
 
     tiptoi_tools.gme.export_yaml(parsed, out_file, media_path=media_path)
     click.echo(f"Wrote {out_file}")
 
 
 @cli.command("play")
-@click.argument(
-    "gme_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
-)
-@click.argument("oid", type=int, required=False, default=None)
-@click.option(
-    "-m",
-    "--media",
-    "media_arg",
-    type=str,
-    default=None,
-    help="Play media by index directly (comma-separated, e.g., '1632' or '1632,2205')",
-)
+@click.argument("target", type=str)
 @click.option(
     "--all",
     "play_all",
@@ -192,32 +210,39 @@ def export_cmd(gme_file: Path, out_file: Path | None, media_path: str | None) ->
     default=None,
     help="Save audio files to this directory instead of playing",
 )
+@pass_gme
 def play_cmd(
-    gme_file: Path,
-    oid: int | None,
-    media_arg: str | None,
+    gme: GmeContext,
+    target: str,
     play_all: bool,
     line_index: int | None,
     verbose: bool,
     save_dir: Path | None,
 ) -> None:
-    """
-    Play audio associated with an OID code or media index.
+    """Play audio by OID or media index.
 
-    Looks up the script for the given OID and plays the associated audio files.
-    Use --media/-m to play directly by media index instead.
+    TARGET can be:
+      123      - Play audio for OID 123
+      @456     - Play media index 456 directly
+      @1,2,3   - Play multiple media indices
     """
-    parsed = tiptoi_tools.gme.parse_file(gme_file)
+    parsed = gme.parsed
 
-    # Handle --media option: play by media index directly
-    if media_arg is not None:
+    # Parse target: @prefix means media index, otherwise OID
+    if target.startswith("@"):
         try:
-            media_indices = [int(x.strip()) for x in media_arg.split(",")]
+            media_indices = [int(x.strip()) for x in target[1:].split(",")]
         except ValueError:
-            click.echo(f"Invalid media index format: {media_arg}")
+            click.echo(f"Invalid media index format: {target}")
             raise SystemExit(1) from None
-        source_desc = f"media {media_arg}"
-    elif oid is not None:
+        source_desc = f"media {target[1:]}"
+    else:
+        try:
+            oid = int(target)
+        except ValueError:
+            click.echo(f"Invalid target: {target} (use OID number or @media_index)")
+            raise SystemExit(1) from None
+
         # Check if OID exists
         if oid not in parsed.script_table.scripts:
             available = parsed.script_table.active_oids
@@ -257,11 +282,6 @@ def play_cmd(
             click.echo(f"OID {oid} has no audio links")
             raise SystemExit(1)
         source_desc = f"OID {oid}"
-    else:
-        click.echo("Error: provide either an OID or use --media/-m to specify indices")
-        raise SystemExit(1)
-
-    data = gme_file.read_bytes()
 
     if save_dir:
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -281,7 +301,7 @@ def play_cmd(
             click.echo(f"  [{idx}] Empty media entry (skipping)")
             continue
 
-        enc = data[entry.offset : entry.offset + entry.length]
+        enc = gme.data[entry.offset : entry.offset + entry.length]
         dec = tiptoi_tools.media.decrypt_media(enc, entry.magic_xor)
         ext = tiptoi_tools.media.guess_extension(dec)
 
@@ -305,13 +325,11 @@ def play_cmd(
 
 
 @cli.command("games")
-@click.argument(
-    "gme_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
-)
 @click.option("-v", "--verbose", is_flag=True, help="Show detailed subgame info")
-def games_cmd(gme_file: Path, verbose: bool) -> None:
+@pass_gme
+def games_cmd(gme: GmeContext, verbose: bool) -> None:
     """List games and their structure."""
-    parsed = tiptoi_tools.gme.parse_file(gme_file)
+    parsed = gme.parsed
 
     if not parsed.games:
         click.echo("No games found.")
@@ -358,36 +376,12 @@ def games_cmd(gme_file: Path, verbose: bool) -> None:
                         media_str = ",".join(str(m) for m in media_ids[:10])
                         if len(media_ids) > 10:
                             media_str += f"... (+{len(media_ids) - 10} more)"
-                        click.echo(f"        [{k}]: {len(pl)} -> media {media_str}")
+                        click.echo(f"        [{k}]: {len(pl)} -> @{media_str}")
 
         click.echo()
 
 
-def _game_type_name(game_type: int) -> str:
-    """Return a human-readable name for a game type."""
-    return {
-        1: "Common",
-        6: "Bonus",
-        7: "Grouped",
-        8: "Select",
-        9: "Extra9",
-        10: "Extra10",
-        16: "Extra16",
-        253: "Special",
-    }.get(game_type, "Unknown")
-
-
-def _print_audio_xors(entries: list[tiptoi_tools.gme.MediaEntry]) -> str:
-    xors = sorted({e.magic_xor for e in entries})
-    if not xors:
-        return "[]"
-    return "[" + ",".join(f"{x:#04X}" for x in xors) + "]"
-
-
 @cli.command("scripts")
-@click.argument(
-    "gme_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
-)
 @click.argument("oid", type=int, required=False)
 @click.option(
     "--action",
@@ -396,21 +390,21 @@ def _print_audio_xors(entries: list[tiptoi_tools.gme.MediaEntry]) -> str:
 )
 @click.option("--media", type=int, help="Find scripts referencing this media index")
 @click.option("--register", type=int, help="Find scripts using this register")
+@pass_gme
 def scripts_cmd(
-    gme_file: Path,
+    gme: GmeContext,
     oid: int | None,
     action: str | None,
     media: int | None,
     register: int | None,
 ) -> None:
-    """
-    Browse and search scripts in a GME file.
+    """Browse and search scripts.
 
     With no arguments, lists all scripts with a summary.
     With an OID argument, shows detailed info for that script.
     Use --action, --media, or --register to filter scripts.
     """
-    parsed = tiptoi_tools.gme.parse_file(gme_file)
+    parsed = gme.parsed
 
     # If a specific OID is requested, show detailed view
     if oid is not None:
@@ -475,14 +469,65 @@ def scripts_cmd(
         if len(audio_refs) == 0:
             audio_str = "[]"
         elif len(audio_refs) <= 3:
-            audio_str = f"[{', '.join(str(m) for m in sorted(audio_refs))}]"
+            audio_str = "@" + ",".join(str(m) for m in sorted(audio_refs))
         else:
             sorted_refs = sorted(audio_refs)
-            audio_str = f"[{sorted_refs[0]}..{sorted_refs[-1]}] ({len(audio_refs)})"
+            audio_str = f"@{sorted_refs[0]}..{sorted_refs[-1]} ({len(audio_refs)})"
 
         click.echo(
             f"{info['oid']:<8} {info['line_count']:<6} {actions_str:<35} {audio_str}"
         )
+
+
+@cli.command("oids")
+@click.argument("oid", type=int, required=False)
+@click.option("--game", type=int, help="Show OIDs used by this game (0-indexed)")
+@pass_gme
+def oids_cmd(gme: GmeContext, oid: int | None, game: int | None) -> None:
+    """Explore OIDs and their relationships.
+
+    With no arguments, shows OID range summary.
+    With an OID argument, shows what that OID is used for.
+    Use --game to list OIDs used by a specific game.
+    """
+    parsed = gme.parsed
+
+    # If --game is specified, show OIDs for that game
+    if game is not None:
+        _show_game_oids(parsed, game)
+        return
+
+    # If a specific OID is requested, look it up
+    if oid is not None:
+        _lookup_oid(parsed, oid)
+        return
+
+    # Default: show OID range summary
+    _show_oid_summary(parsed)
+
+
+# Helper functions
+
+
+def _game_type_name(game_type: int) -> str:
+    """Return a human-readable name for a game type."""
+    return {
+        1: "Common",
+        6: "Bonus",
+        7: "Grouped",
+        8: "Select",
+        9: "Extra9",
+        10: "Extra10",
+        16: "Extra16",
+        253: "Special",
+    }.get(game_type, "Unknown")
+
+
+def _print_audio_xors(entries: list[tiptoi_tools.gme.MediaEntry]) -> str:
+    xors = sorted({e.magic_xor for e in entries})
+    if not xors:
+        return "[]"
+    return "[" + ",".join(f"{x:#04X}" for x in xors) + "]"
 
 
 def _analyze_script(oid: int, lines: list) -> dict:
@@ -565,7 +610,7 @@ def _show_script_detail(parsed, oid: int) -> None:
         # Audio
         if line.audio_links:
             audio_str = ", ".join(str(m) for m in line.audio_links)
-            click.echo(f"    Audio: [{audio_str}]")
+            click.echo(f"    Audio: @{audio_str}")
         else:
             click.echo("    Audio: (none)")
 
@@ -602,36 +647,6 @@ def _format_action_detail(action) -> str:
         return f"{kind}({payload})"
 
     return f"{kind}({payload})"
-
-
-@cli.command("oids")
-@click.argument(
-    "gme_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
-)
-@click.argument("oid", type=int, required=False)
-@click.option("--game", type=int, help="Show OIDs used by this game (0-indexed)")
-def oids_cmd(gme_file: Path, oid: int | None, game: int | None) -> None:
-    """
-    Explore OIDs and their relationships in a GME file.
-
-    With no arguments, shows OID range summary.
-    With an OID argument, shows what that OID is used for.
-    Use --game to list OIDs used by a specific game.
-    """
-    parsed = tiptoi_tools.gme.parse_file(gme_file)
-
-    # If --game is specified, show OIDs for that game
-    if game is not None:
-        _show_game_oids(parsed, game)
-        return
-
-    # If a specific OID is requested, look it up
-    if oid is not None:
-        _lookup_oid(parsed, oid)
-        return
-
-    # Default: show OID range summary
-    _show_oid_summary(parsed)
 
 
 def _show_oid_summary(parsed) -> None:
@@ -712,9 +727,9 @@ def _lookup_oid(parsed, oid: int) -> None:
             if info["media_refs"]:
                 refs = sorted(info["media_refs"])
                 if len(refs) <= 5:
-                    click.echo(f"    Audio: {refs}")
+                    click.echo(f"    Audio: @{','.join(str(r) for r in refs)}")
                 else:
-                    click.echo(f"    Audio: {refs[0]}-{refs[-1]} ({len(refs)} files)")
+                    click.echo(f"    Audio: @{refs[0]}..{refs[-1]} ({len(refs)} files)")
 
             # Check if this script starts a game
             for line in lines:
