@@ -81,7 +81,8 @@ def info_cmd(gme: GmeContext) -> None:
     click.echo("  init: " + (tiptoi_tools.gme.serialize(parsed).get("init") or ""))
     click.echo("")
 
-    click.echo(f"Welcome OID: {parsed.script_table.first_oid}")
+    welcome = parsed.welcome_sounds.serialize(collapse=True)
+    click.echo(f"Welcome sounds: @{welcome}" if welcome else "Welcome sounds: (none)")
     click.echo(f"Audio table entries: {len(parsed.media_entries)}")
     click.echo(f"Audio table copy: {parsed.duplicated_table.value}")
     click.echo(f"Audio XOR values: {_print_audio_xors(parsed.media_entries)}")
