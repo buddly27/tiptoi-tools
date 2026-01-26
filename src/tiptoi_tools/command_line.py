@@ -157,7 +157,15 @@ def export_cmd(gme_file: Path, out_file: Path | None, media_path: str | None) ->
 @click.argument(
     "gme_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
 )
-@click.argument("oid", type=int)
+@click.argument("oid", type=int, required=False, default=None)
+@click.option(
+    "-m",
+    "--media",
+    "media_arg",
+    type=str,
+    default=None,
+    help="Play media by index directly (comma-separated, e.g., '1632' or '1632,2205')",
+)
 @click.option(
     "--all",
     "play_all",
@@ -186,57 +194,71 @@ def export_cmd(gme_file: Path, out_file: Path | None, media_path: str | None) ->
 )
 def play_cmd(
     gme_file: Path,
-    oid: int,
+    oid: int | None,
+    media_arg: str | None,
     play_all: bool,
     line_index: int | None,
     verbose: bool,
     save_dir: Path | None,
 ) -> None:
     """
-    Play audio associated with an OID code.
+    Play audio associated with an OID code or media index.
 
     Looks up the script for the given OID and plays the associated audio files.
-    By default plays audio from the first script line.
+    Use --media/-m to play directly by media index instead.
     """
     parsed = tiptoi_tools.gme.parse_file(gme_file)
 
-    # Check if OID exists
-    if oid not in parsed.script_table.scripts:
-        available = parsed.script_table.active_oids
-        if available:
-            click.echo(
-                f"OID {oid} not found. Available OIDs: {available[0]}-{available[-1]}"
-            )
-        else:
-            click.echo(f"OID {oid} not found. No scripts in this file.")
-        raise SystemExit(1)
-
-    script_lines = parsed.script_table.scripts[oid]
-    if script_lines is None or len(script_lines) == 0:
-        click.echo(f"OID {oid} has no script (null pointer)")
-        raise SystemExit(1)
-
-    # Determine which lines to play
-    if line_index is not None:
-        if line_index < 0 or line_index >= len(script_lines):
-            n = len(script_lines)
-            click.echo(f"Line {line_index} out of range. OID {oid} has {n} line(s).")
+    # Handle --media option: play by media index directly
+    if media_arg is not None:
+        try:
+            media_indices = [int(x.strip()) for x in media_arg.split(",")]
+        except ValueError:
+            click.echo(f"Invalid media index format: {media_arg}")
+            raise SystemExit(1) from None
+        source_desc = f"media {media_arg}"
+    elif oid is not None:
+        # Check if OID exists
+        if oid not in parsed.script_table.scripts:
+            available = parsed.script_table.active_oids
+            if available:
+                click.echo(
+                    f"OID {oid} not found. Available: {available[0]}-{available[-1]}"
+                )
+            else:
+                click.echo(f"OID {oid} not found. No scripts in this file.")
             raise SystemExit(1)
-        lines_to_play = [script_lines[line_index]]
-    elif play_all:
-        lines_to_play = script_lines
+
+        script_lines = parsed.script_table.scripts[oid]
+        if script_lines is None or len(script_lines) == 0:
+            click.echo(f"OID {oid} has no script (null pointer)")
+            raise SystemExit(1)
+
+        # Determine which lines to play
+        if line_index is not None:
+            if line_index < 0 or line_index >= len(script_lines):
+                n = len(script_lines)
+                click.echo(f"Line {line_index} out of range. OID {oid} has {n} line(s)")
+                raise SystemExit(1)
+            lines_to_play = [script_lines[line_index]]
+        elif play_all:
+            lines_to_play = script_lines
+        else:
+            lines_to_play = [script_lines[0]]
+
+        # Collect all unique media indices
+        media_indices = []
+        for line in lines_to_play:
+            for idx in line.audio_links:
+                if idx not in media_indices:
+                    media_indices.append(idx)
+
+        if not media_indices:
+            click.echo(f"OID {oid} has no audio links")
+            raise SystemExit(1)
+        source_desc = f"OID {oid}"
     else:
-        lines_to_play = [script_lines[0]]
-
-    # Collect all unique media indices
-    media_indices: list[int] = []
-    for line in lines_to_play:
-        for idx in line.audio_links:
-            if idx not in media_indices:
-                media_indices.append(idx)
-
-    if not media_indices:
-        click.echo(f"OID {oid} has no audio links")
+        click.echo("Error: provide either an OID or use --media/-m to specify indices")
         raise SystemExit(1)
 
     data = gme_file.read_bytes()
@@ -244,9 +266,9 @@ def play_cmd(
     if save_dir:
         save_dir.mkdir(parents=True, exist_ok=True)
         n = len(media_indices)
-        click.echo(f"OID {oid}: saving {n} audio file(s) to {save_dir}")
+        click.echo(f"{source_desc}: saving {n} audio file(s) to {save_dir}")
     else:
-        click.echo(f"OID {oid}: {len(media_indices)} audio file(s) to play")
+        click.echo(f"{source_desc}: {len(media_indices)} audio file(s) to play")
         click.echo(f"Audio player: {tiptoi_tools.audio.get_player_info()}")
 
     for idx in media_indices:
