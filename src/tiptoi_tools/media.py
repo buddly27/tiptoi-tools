@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from tiptoi_tools.binary import BinaryReader
+from tiptoi_tools.binary import BinaryReader, BinaryWriter
 
 # Known audio file magic bytes and their extensions
 FILE_SIGNATURES: dict[bytes, str] = {
@@ -9,6 +9,9 @@ FILE_SIGNATURES: dict[bytes, str] = {
     b"fLaC": ".flac",
     b"ID3": ".mp3",
 }
+
+# Default XOR key for media encryption
+DEFAULT_XOR_KEY = 0xAD
 
 
 @dataclass(frozen=True)
@@ -112,9 +115,9 @@ def _find_magic_xor(first4: bytes) -> int:
     raise ValueError("Could not find magic_xor")
 
 
-def decrypt_media(payload: bytes, magic_xor: int) -> bytes:
+def xor_cipher(payload: bytes, magic_xor: int) -> bytes:
     """
-    Tiptoi media decryption:
+    Tiptoi media XOR cipher (symmetric - used for both encryption and decryption):
     - bytes 0x00, 0xFF, x, (x ^ 0xFF) are unchanged
     - everything else XORed with x
     """
@@ -129,3 +132,38 @@ def guess_extension(decrypted: bytes) -> str:
         if decrypted.startswith(magic):
             return ext
     return ".bin"
+
+
+def encode(
+    w: BinaryWriter,
+    audio_files: list[bytes],
+    xor_key: int,
+) -> None:
+    """
+    Encode the media table and audio data.
+
+    Args:
+        w: BinaryWriter to write to
+        audio_files: List of raw (unencrypted) audio file contents
+        xor_key: XOR key for encryption
+    """
+    if not audio_files:
+        return
+
+    # Write offset/length placeholders
+    table_base = w.offset
+    for _ in audio_files:
+        w.u32(0)  # offset placeholder
+        w.u32(0)  # length placeholder
+
+    # Write each audio file and patch table entry
+    for i, audio_data in enumerate(audio_files):
+        offset = w.offset
+
+        # Encrypt and write
+        encrypted = xor_cipher(audio_data, xor_key)
+        w.bytes(encrypted)
+
+        # Patch table entry
+        w.u32_at(table_base + i * 8, offset)
+        w.u32_at(table_base + i * 8 + 4, len(audio_data))

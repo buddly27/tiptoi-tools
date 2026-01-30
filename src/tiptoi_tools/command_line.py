@@ -7,11 +7,13 @@ import tiptoi_tools.gme
 import tiptoi_tools.media
 
 
-class GmeContext:
-    """Context object holding the parsed GME file and raw data."""
+class FileContext:
+    """Context object holding the input file and lazily loaded data."""
 
-    def __init__(self, gme_file: Path):
-        self.gme_file = gme_file
+    def __init__(self, input_file: Path):
+        self.input_file = input_file
+        self.is_yaml = input_file.suffix.lower() in (".yaml", ".yml")
+        self.is_gme = input_file.suffix.lower() == ".gme"
         self._parsed = None
         self._data = None
 
@@ -19,18 +21,34 @@ class GmeContext:
     def parsed(self):
         """Lazily parse the GME file."""
         if self._parsed is None:
-            self._parsed = tiptoi_tools.gme.parse_file(self.gme_file)
+            if not self.is_gme:
+                raise click.ClickException("This command requires a GME file")
+            self._parsed = tiptoi_tools.gme.parse_file(self.input_file)
         return self._parsed
 
     @property
     def data(self) -> bytes:
         """Lazily read the raw file data."""
         if self._data is None:
-            self._data = self.gme_file.read_bytes()
+            self._data = self.input_file.read_bytes()
         return self._data
 
+    def require_gme(self) -> None:
+        """Raise an error if the input is not a GME file."""
+        if not self.is_gme:
+            raise click.ClickException(
+                f"This command requires a .gme file, got: {self.input_file.suffix}"
+            )
 
-pass_gme = click.make_pass_decorator(GmeContext)
+    def require_yaml(self) -> None:
+        """Raise an error if the input is not a YAML file."""
+        if not self.is_yaml:
+            raise click.ClickException(
+                f"This command requires a .yaml file, got: {self.input_file.suffix}"
+            )
+
+
+pass_ctx = click.make_pass_decorator(FileContext)
 
 
 @click.group(
@@ -38,36 +56,41 @@ pass_gme = click.make_pass_decorator(GmeContext)
     invoke_without_command=True,
 )
 @click.argument(
-    "gme_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+    "input_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
 )
 @click.version_option(package_name="tiptoi-tools")
 @click.pass_context
-def cli(ctx: click.Context, gme_file: Path) -> None:
-    """Tools for working with Tiptoi GME files.
+def cli(ctx: click.Context, input_file: Path) -> None:
+    """Tools for working with Tiptoi GME and YAML files.
 
-    Usage: tiptoi-tools <file.gme> <action> [options]
+    \b
+    Usage:
+      tiptoi-tools <file.gme> <command> [options]
+      tiptoi-tools <file.yaml> build [options]
 
+    \b
     Examples:
-      tiptoi-tools file.gme info
-      tiptoi-tools file.gme play 123
-      tiptoi-tools file.gme play @1632
-      tiptoi-tools file.gme games -v
+      tiptoi-tools file.gme export              # Export to current dir
+      tiptoi-tools file.gme export ./out        # Export to ./out/
+      tiptoi-tools file.gme export --name foo   # Use 'foo' as identifier
+      tiptoi-tools file.yaml build              # Build GME from YAML
+      tiptoi-tools file.gme info                # Show file info
+      tiptoi-tools file.gme play @123           # Play audio
     """
-    ctx.obj = GmeContext(gme_file)
+    ctx.obj = FileContext(input_file)
     if ctx.invoked_subcommand is None:
-        # Default to info if no subcommand given
-        ctx.invoke(info_cmd)
+        click.echo(ctx.get_help())
 
 
 @cli.command("info")
-@pass_gme
-def info_cmd(gme: GmeContext) -> None:
+@pass_ctx
+def info_cmd(ctx: FileContext) -> None:
     """Show general information about the GME file."""
-    parsed = gme.parsed
+    parsed = ctx.parsed
     hdr = parsed.header
 
-    click.echo(f"File: {gme.gme_file}")
-    click.echo(f"Size: {gme.gme_file.stat().st_size} bytes")
+    click.echo(f"File: {ctx.input_file}")
+    click.echo(f"Size: {ctx.input_file.stat().st_size} bytes")
     click.echo("")
     click.echo("Header:")
     click.echo(f"  Product id code:               {hdr.product_id_code}")
@@ -110,76 +133,121 @@ def info_cmd(gme: GmeContext) -> None:
     click.echo(f"Checksum found 0x{found:08X}, calculated 0x{calc:08X}")
 
 
-@cli.command("extract")
-@click.option(
-    "--dir",
+@cli.command("export")
+@click.argument(
     "out_dir",
+    required=False,
     type=click.Path(file_okay=False, path_type=Path),
-    default=Path("media"),
-    show_default=True,
-    help="Media output directory",
+    default=Path("."),
 )
 @click.option(
-    "--limit", type=int, default=None, help="Only extract first N media files"
+    "--name",
+    default=None,
+    help="Identifier for output files. Default: GME filename stem",
 )
-@pass_gme
-def extract_cmd(gme: GmeContext, out_dir: Path, limit: int | None) -> None:
-    """Extract and decrypt all media files from the GME."""
-    parsed = gme.parsed
-    hdr = parsed.header
+@click.option(
+    "--no-media",
+    is_flag=True,
+    help="Skip extracting media files (only export YAML)",
+)
+@click.option(
+    "-f", "--force", is_flag=True, help="Overwrite existing files without asking"
+)
+@pass_ctx
+def export_cmd(
+    ctx: FileContext,
+    out_dir: Path,
+    name: str | None,
+    no_media: bool,
+    force: bool,
+) -> None:
+    """Export the GME file to YAML format with media files.
+
+    Creates {name}.yaml and media/{name}_*.ogg files in the output directory.
+    Use --no-media to skip media extraction.
+
+    \b
+    Examples:
+      tiptoi-tools file.gme export              # Export to current directory
+      tiptoi-tools file.gme export ./output     # Export to ./output/
+      tiptoi-tools file.gme export --name foo   # Use 'foo' as identifier
+    """
+    parsed = ctx.parsed
+
+    # Default name from GME filename
+    if name is None:
+        name = ctx.input_file.stem
+
+    # Create output directory if needed
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Output paths
+    yaml_path = out_dir / f"{name}.yaml"
+    media_path = f"media/{name}_%s"
+
+    if yaml_path.exists() and not force:
+        if not click.confirm(f"{yaml_path} already exists. Overwrite?"):
+            raise SystemExit(0)
+
+    # Export YAML
+    tiptoi_tools.gme.export_yaml(parsed, yaml_path, media_path=media_path)
+    click.echo(f"Wrote {yaml_path}")
+
+    # Extract media files unless --no-media
+    if not no_media:
+        _extract_media(ctx, out_dir / "media", f"{name}_")
+
+
+def _extract_media(ctx: FileContext, out_dir: Path, prefix: str) -> None:
+    """Extract media files with the given prefix."""
+    parsed = ctx.parsed
+    entries = parsed.media_entries
+
+    if not entries:
+        click.echo("No media files to extract.")
+        return
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    entries = parsed.media_entries
-    if not entries:
-        raise click.ClickException(
-            "No media entries found (media table missing or unparseable)."
-        )
-
-    click.echo(
-        f"Found {len(entries)} media entries in table at 0x{hdr.media_table_offset:08X}"
-    )
-
-    count = 0
+    click.echo(f"Extracting {len(entries)} media files to {out_dir}/")
     for entry in entries:
-        if limit is not None and count >= limit:
-            break
-
-        enc = gme.data[entry.offset : entry.offset + entry.length]
-        dec = tiptoi_tools.media.decrypt_media(enc, entry.magic_xor)
+        enc = ctx.data[entry.offset : entry.offset + entry.length]
+        dec = tiptoi_tools.media.xor_cipher(enc, entry.magic_xor)
         ext = tiptoi_tools.media.guess_extension(dec)
 
-        out_path = out_dir / f"{entry.index:04d}{ext}"
+        out_path = out_dir / f"{prefix}{entry.index}{ext}"
         out_path.write_bytes(dec)
 
-        click.echo(
-            f"  [{entry.index:4d}] off=0x{entry.offset:08X} len={entry.length:8d}"
-            f" -> {out_path.name}"
-        )
-        count += 1
+    click.echo(f"Extracted {len(entries)} media files.")
 
 
-@cli.command("export")
+@cli.command("build")
 @click.argument(
     "out_file", required=False, type=click.Path(dir_okay=False, path_type=Path)
 )
 @click.option(
-    "--media-path",
-    default=None,
-    help="Value for the 'media-path' field in YAML. Default: media/{stem}_%s",
+    "-f", "--force", is_flag=True, help="Overwrite existing file without asking"
 )
-@pass_gme
-def export_cmd(gme: GmeContext, out_file: Path | None, media_path: str | None) -> None:
-    """Export the GME file to tttool-compatible YAML format."""
-    parsed = gme.parsed
+@pass_ctx
+def build_cmd(ctx: FileContext, out_file: Path | None, force: bool) -> None:
+    """Build a GME file from a tttool-compatible YAML file."""
+    ctx.require_yaml()
 
     if out_file is None:
-        out_file = gme.gme_file.with_suffix(".yaml")
+        out_file = ctx.input_file.with_suffix(".gme")
 
-    if media_path is None:
-        media_path = f"media/{gme.gme_file.stem}_%s"
+    if out_file.exists() and not force:
+        if not click.confirm(f"{out_file} already exists. Overwrite?"):
+            raise SystemExit(0)
 
-    tiptoi_tools.gme.export_yaml(parsed, out_file, media_path=media_path)
+    click.echo(f"Building {out_file} from {ctx.input_file}...")
+    try:
+        parsed, audio_files = tiptoi_tools.gme.import_yaml(ctx.input_file)
+        gme_data = tiptoi_tools.gme.encode(parsed, audio_files)
+        out_file.write_bytes(gme_data)
+    except RuntimeError as e:
+        # TODO: Create special exception for this
+        raise click.ClickException(str(e)) from None
     click.echo(f"Wrote {out_file}")
 
 
@@ -211,9 +279,9 @@ def export_cmd(gme: GmeContext, out_file: Path | None, media_path: str | None) -
     default=None,
     help="Save audio files to this directory instead of playing",
 )
-@pass_gme
+@pass_ctx
 def play_cmd(
-    gme: GmeContext,
+    ctx: FileContext,
     target: str,
     play_all: bool,
     line_index: int | None,
@@ -227,7 +295,7 @@ def play_cmd(
       @456     - Play media index 456 directly
       @1,2,3   - Play multiple media indices
     """
-    parsed = gme.parsed
+    parsed = ctx.parsed
 
     # Parse target: @prefix means media index, otherwise OID
     if target.startswith("@"):
@@ -302,8 +370,8 @@ def play_cmd(
             click.echo(f"  [{idx}] Empty media entry (skipping)")
             continue
 
-        enc = gme.data[entry.offset : entry.offset + entry.length]
-        dec = tiptoi_tools.media.decrypt_media(enc, entry.magic_xor)
+        enc = ctx.data[entry.offset : entry.offset + entry.length]
+        dec = tiptoi_tools.media.xor_cipher(enc, entry.magic_xor)
         ext = tiptoi_tools.media.guess_extension(dec)
 
         if verbose:
@@ -327,10 +395,10 @@ def play_cmd(
 
 @cli.command("games")
 @click.option("-v", "--verbose", is_flag=True, help="Show detailed subgame info")
-@pass_gme
-def games_cmd(gme: GmeContext, verbose: bool) -> None:
+@pass_ctx
+def games_cmd(ctx: FileContext, verbose: bool) -> None:
     """List games and their structure."""
-    parsed = gme.parsed
+    parsed = ctx.parsed
 
     if not parsed.games:
         click.echo("No games found.")
@@ -391,9 +459,9 @@ def games_cmd(gme: GmeContext, verbose: bool) -> None:
 )
 @click.option("--media", type=int, help="Find scripts referencing this media index")
 @click.option("--register", type=int, help="Find scripts using this register")
-@pass_gme
+@pass_ctx
 def scripts_cmd(
-    gme: GmeContext,
+    ctx: FileContext,
     oid: int | None,
     action: str | None,
     media: int | None,
@@ -405,7 +473,7 @@ def scripts_cmd(
     With an OID argument, shows detailed info for that script.
     Use --action, --media, or --register to filter scripts.
     """
-    parsed = gme.parsed
+    parsed = ctx.parsed
 
     # If a specific OID is requested, show detailed view
     if oid is not None:
@@ -483,15 +551,15 @@ def scripts_cmd(
 @cli.command("oids")
 @click.argument("oid", type=int, required=False)
 @click.option("--game", type=int, help="Show OIDs used by this game (0-indexed)")
-@pass_gme
-def oids_cmd(gme: GmeContext, oid: int | None, game: int | None) -> None:
+@pass_ctx
+def oids_cmd(ctx: FileContext, oid: int | None, game: int | None) -> None:
     """Explore OIDs and their relationships.
 
     With no arguments, shows OID range summary.
     With an OID argument, shows what that OID is used for.
     Use --game to list OIDs used by a specific game.
     """
-    parsed = gme.parsed
+    parsed = ctx.parsed
 
     # If --game is specified, show OIDs for that game
     if game is not None:

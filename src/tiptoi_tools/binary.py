@@ -1,7 +1,7 @@
 import struct
-from typing import NewType
+from typing import TypeAlias
 
-OID = NewType("OID", int)
+OID: TypeAlias = int
 
 
 def u8(data: bytes, offset: int) -> int:
@@ -89,3 +89,71 @@ class BinaryReader:
     def skip(self, n: int) -> None:
         """Skip n bytes."""
         self.offset += n
+
+
+class BinaryWriter:
+    """Sequential writer for binary data with automatic offset tracking."""
+
+    def __init__(self):
+        self._data = bytearray()
+
+    @property
+    def offset(self) -> int:
+        """Current write position."""
+        return len(self._data)
+
+    def u8(self, value: int) -> None:
+        """Write an unsigned 8-bit integer."""
+        self._data.append(value & 0xFF)
+
+    def u16(self, value: int) -> None:
+        """Write a little-endian unsigned 16-bit integer."""
+        self._data.extend(struct.pack("<H", value))
+
+    def u32(self, value: int) -> None:
+        """Write a little-endian unsigned 32-bit integer."""
+        self._data.extend(struct.pack("<I", value))
+
+    def bytes(self, data: bytes) -> None:
+        """Write raw bytes."""
+        self._data.extend(data)
+
+    def u16_array(self, values: list[int]) -> None:
+        """Write an array of u16 values."""
+        for v in values:
+            self.u16(v)
+
+    def u32_array(self, values: list[int]) -> None:
+        """Write an array of u32 values."""
+        for v in values:
+            self.u32(v)
+
+    def u16_list(self, values: list[int]) -> None:
+        """Write a length-prefixed list of u16 values."""
+        self.u16(len(values))
+        self.u16_array(values)
+
+    def pad_to(self, target: int) -> None:
+        """Pad with zeros to reach target offset."""
+        if self.offset < target:
+            self._data.extend(b"\x00" * (target - self.offset))
+
+    def u8_at(self, offset: int, value: int) -> None:
+        """Patch a u8 at a specific offset."""
+        self._data[offset] = value & 0xFF
+
+    def u16_at(self, offset: int, value: int) -> None:
+        """Patch a u16 at a specific offset."""
+        self._data[offset : offset + 2] = struct.pack("<H", value)
+
+    def u32_at(self, offset: int, value: int) -> None:
+        """Patch a u32 at a specific offset."""
+        self._data[offset : offset + 4] = struct.pack("<I", value)
+
+    def bytes_at(self, offset: int, data: bytes) -> None:
+        """Patch bytes at a specific offset."""
+        self._data[offset : offset + len(data)] = data
+
+    def to_bytes(self) -> bytes:
+        """Return the written data as bytes."""
+        return bytes(self._data)
