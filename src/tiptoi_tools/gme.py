@@ -24,8 +24,6 @@ from tiptoi_tools.media import DEFAULT_XOR_KEY
 from tiptoi_tools.media import decode as decode_media_entries
 from tiptoi_tools.media import encode as encode_media_entries
 from tiptoi_tools.playlist import Playlist, PlaylistTable
-from tiptoi_tools.playlist import decode_table as decode_playlist_table
-from tiptoi_tools.playlist import encode_table as encode_playlist_table
 from tiptoi_tools.scripts import ActionKind, ScriptLine, ScriptTable
 from tiptoi_tools.scripts import decode as decode_scripts
 from tiptoi_tools.scripts import encode as encode_scripts
@@ -141,7 +139,7 @@ def decode(data: bytes) -> ParsedGme:
         else 0
     )
     welcome_sounds = (
-        decode_playlist_table(data, welcome_offset)
+        PlaylistTable.decode(data, welcome_offset)
         if welcome_offset
         else PlaylistTable(playlists=())
     )
@@ -213,8 +211,7 @@ def encode(parsed: ParsedGme, audio_files: list[bytes]) -> bytes:
 
     # Write welcome playlist
     welcome_offset = w.offset
-    welcome_lists = [list(pl.indices) for pl in parsed.welcome_sounds]
-    encode_playlist_table(w, welcome_lists)
+    parsed.welcome_sounds.encode(w)
 
     # Write special OIDs
     special_oids_offset = 0

@@ -3,7 +3,6 @@ from typing import Any
 
 from tiptoi_tools.binary import OID, BinaryReader
 from tiptoi_tools.playlist import PlaylistTable
-from tiptoi_tools.playlist import decode_table as decode_playlist_table
 
 # Game type constants
 GAME_TYPE_COMMON = 1
@@ -99,7 +98,7 @@ class GameReader(BinaryReader):
 
     def playlist(self) -> PlaylistTable:
         """Read a pointer and decode the playlist table at that location."""
-        return decode_playlist_table(self.data, self.u32())
+        return PlaylistTable.decode(self.data, self.u32())
 
     def playlists(self, count: int) -> list[PlaylistTable]:
         """Read multiple playlist table pointers."""

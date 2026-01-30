@@ -74,36 +74,29 @@ class PlaylistTable:
             return self.playlists[0].serialize()
         return [pl.serialize() for pl in self.playlists]
 
+    @classmethod
+    def decode(cls, data: bytes, offset: int) -> "PlaylistTable":
+        """Decode a playlist table from binary data."""
+        r = BinaryReader(data, offset)
+        count = r.u16()
 
-def decode_table(data: bytes, offset: int) -> PlaylistTable:
-    """Decode a playlist table: a count followed by pointers to individual playlists."""
-    r = BinaryReader(data, offset)
-    count = r.u16()
+        playlists: list[Playlist] = []
+        for ptr in r.u32_array(count):
+            indices = tuple(BinaryReader(data, ptr).u16_list())
+            playlists.append(Playlist(indices=indices))
 
-    playlists: list[Playlist] = []
-    for ptr in r.u32_array(count):
-        indices = tuple(BinaryReader(data, ptr).u16_list())
-        playlists.append(Playlist(indices=indices))
+        return cls(playlists=tuple(playlists))
 
-    return PlaylistTable(playlists=tuple(playlists))
+    def encode(self, w: BinaryWriter) -> None:
+        """Encode the playlist table to a BinaryWriter."""
+        w.u16(len(self.playlists))
 
+        # Write pointer placeholders
+        pointer_base = w.offset
+        for _ in self.playlists:
+            w.u32(0)
 
-def encode_table(w: BinaryWriter, playlists: list[list[int]]) -> None:
-    """
-    Encode a playlist table.
-
-    Args:
-        w: BinaryWriter to write to
-        playlists: List of playlists, each a list of media indices
-    """
-    w.u16(len(playlists))
-
-    # Write pointer placeholders
-    pointer_base = w.offset
-    for _ in playlists:
-        w.u32(0)
-
-    # Write each playlist and patch its pointer
-    for i, playlist in enumerate(playlists):
-        w.u32_at(pointer_base + i * 4, w.offset)
-        w.u16_list(playlist)
+        # Write each playlist and patch its pointer
+        for i, playlist in enumerate(self.playlists):
+            w.u32_at(pointer_base + i * 4, w.offset)
+            w.u16_list(list(playlist.indices))
