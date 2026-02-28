@@ -672,3 +672,5 @@ def _load_audio_files(
             f"Expected path pattern: {pattern}\n"
             f"Run 'tiptoi-tools <file.gme> export' to extract audio files."
         )
+
+    return audio_files
