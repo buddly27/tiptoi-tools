@@ -15,9 +15,7 @@ from tiptoi_tools.binary import (
     u16le,
     u32le,
 )
-from tiptoi_tools.games import Game
-from tiptoi_tools.games import decode as decode_games
-from tiptoi_tools.games import serialize as serialize_game
+from tiptoi_tools.games import GameTable
 from tiptoi_tools.media import DEFAULT_XOR_KEY, MediaTable
 from tiptoi_tools.playlist import Playlist, PlaylistTable
 from tiptoi_tools.scripts import ScriptTable
@@ -98,7 +96,7 @@ class ParsedGme:
     single_binary_tables_entries: tuple[int, int, int]
     special_oids: tuple[OID, OID] | None
     script_table: ScriptTable
-    games: list[Game]
+    game_table: GameTable
     checksum_found: int
     checksum_calculated: int
 
@@ -151,7 +149,7 @@ def decode(data: bytes) -> ParsedGme:
     special_oids = _decode_special_oids(data, OFFSET_SPECIAL_OIDS)
 
     script_table = ScriptTable.decode(data, header.script_table_offset)
-    games = decode_games(data, header.game_table_offset)
+    game_table = GameTable.decode(data, header.game_table_offset)
 
     checksum_found = u32le(data, len(data) - 4)
     checksum_calculated = sum(data[:-4]) & 0xFFFFFFFF
@@ -166,7 +164,7 @@ def decode(data: bytes) -> ParsedGme:
         single_binary_tables_entries=single_binary_tables_entries,
         special_oids=special_oids,
         script_table=script_table,
-        games=games,
+        game_table=game_table,
         checksum_found=checksum_found,
         checksum_calculated=checksum_calculated,
     )
@@ -252,7 +250,7 @@ def serialize(
         "media-path": media_path,
         "init": _serialize_registers(parsed.registers),
         "scripts": parsed.script_table.serialize(),
-        "games": [serialize_game(g) for g in parsed.games],
+        "games": parsed.game_table.serialize(),
     }
 
     if header.language_string:
@@ -356,7 +354,7 @@ def import_yaml(yaml_path: Path) -> tuple[ParsedGme, list[bytes]]:
         single_binary_tables_entries=(0, 0, 0),
         special_oids=special_oids,
         script_table=script_table,
-        games=[],  # TODO: parse games
+        game_table=GameTable(games=()),  # TODO: parse games
         checksum_found=0,
         checksum_calculated=0,
     )

@@ -126,7 +126,7 @@ def info_cmd(ctx: FileContext) -> None:
     click.echo(f"Scripts: {len(parsed.script_table.active_oids)} present")
     st = parsed.script_table
     click.echo(f"OID range: {st.first_oid}-{st.last_oid}")
-    click.echo(f"Games: {len(parsed.games)} total")
+    click.echo(f"Games: {len(parsed.game_table)} total")
     click.echo("")
     found = parsed.checksum_found
     calc = parsed.checksum_calculated
@@ -400,13 +400,13 @@ def games_cmd(ctx: FileContext, verbose: bool) -> None:
     """List games and their structure."""
     parsed = ctx.parsed
 
-    if not parsed.games:
+    if not parsed.game_table:
         click.echo("No games found.")
         return
 
-    click.echo(f"Found {len(parsed.games)} game(s):\n")
+    click.echo(f"Found {len(parsed.game_table)} game(s):\n")
 
-    for i, game in enumerate(parsed.games, start=1):
+    for i, game in enumerate(parsed.game_table, start=1):
         type_name = _game_type_name(game.game_type)
         click.echo(f"Game #{i}: {type_name} (type {game.game_type})")
 
@@ -739,11 +739,10 @@ def _show_oid_summary(parsed) -> None:
         click.echo()
 
     if game_oids:
-        click.echo(
-            f"Game OIDs ({len(game_oids)} total across {len(parsed.games)} game(s)):"
-        )
+        n_games = len(parsed.game_table)
+        click.echo(f"Game OIDs ({len(game_oids)} total across {n_games} game(s)):")
         for game_idx, oids_by_type in game_oids.items():
-            game = parsed.games[game_idx]
+            game = parsed.game_table[game_idx]
             type_name = _game_type_name(game.game_type)
             total = sum(len(v) for v in oids_by_type.values())
             click.echo(f"  Game {game_idx} ({type_name}): {total} OIDs")
@@ -805,8 +804,8 @@ def _lookup_oid(parsed, oid: int) -> None:
                 for act in line.actions:
                     if act.kind.value == "StartGame":
                         game_id = act.payload
-                        if 0 <= game_id < len(parsed.games):
-                            game = parsed.games[game_id]
+                        if 0 <= game_id < len(parsed.game_table):
+                            game = parsed.game_table[game_id]
                             type_name = _game_type_name(game.game_type)
                             click.echo(f"    Starts: Game {game_id} ({type_name})")
             found_something = True
@@ -831,11 +830,12 @@ def _lookup_oid(parsed, oid: int) -> None:
 
 def _show_game_oids(parsed, game_idx: int) -> None:
     """Show all OIDs used by a specific game."""
-    if game_idx < 0 or game_idx >= len(parsed.games):
-        click.echo(f"Game {game_idx} not found (0-{len(parsed.games) - 1} available)")
+    n_games = len(parsed.game_table)
+    if game_idx < 0 or game_idx >= n_games:
+        click.echo(f"Game {game_idx} not found (0-{n_games - 1} available)")
         raise SystemExit(1)
 
-    game = parsed.games[game_idx]
+    game = parsed.game_table[game_idx]
     type_name = _game_type_name(game.game_type)
     click.echo(f"Game {game_idx}: {type_name} (type {game.game_type})\n")
 
@@ -883,7 +883,7 @@ def _collect_game_oids(parsed) -> dict[int, dict[str, list[int]]]:
     """Collect all OIDs used by games."""
     result: dict[int, dict[str, list[int]]] = {}
 
-    for i, game in enumerate(parsed.games):
+    for i, game in enumerate(parsed.game_table):
         if game.game_type == 253:
             continue
 
@@ -924,7 +924,7 @@ def _find_oid_in_games(parsed, target_oid: int) -> list[dict]:
     """Find all references to an OID in game structures."""
     refs = []
 
-    for i, game in enumerate(parsed.games):
+    for i, game in enumerate(parsed.game_table):
         if game.game_type == 253:
             continue
 
