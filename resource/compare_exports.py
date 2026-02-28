@@ -92,19 +92,23 @@ def export_with_tttool(gme_path: Path, yaml_path: Path, tttool: Path) -> bool:
     return False
 
 
-def export_with_tiptoi_tools(gme_path: Path, yaml_path: Path) -> bool:
+def export_with_tiptoi_tools(gme_path: Path, yaml_path: Path, name: str) -> bool:
     """Export GME to YAML using tiptoi-tools."""
     try:
         subprocess.run(
-            ["tiptoi-tools", "export", str(gme_path)],
+            [
+                "tiptoi-tools",
+                str(gme_path),
+                "export",
+                "--no-media",
+                "--name",
+                name,
+                yaml_path,
+            ],
             capture_output=True,
             check=True,
         )
-        # tiptoi-tools writes yaml next to the gme file
-        src = gme_path.with_suffix(".yaml")
-        if src.exists():
-            src.rename(yaml_path)
-            return True
+        return True
     except subprocess.CalledProcessError:
         pass
     return False
@@ -187,11 +191,11 @@ def main():
         for gme in gme_files:
             idx = gme.stem.split("_")[1]
             target = yaml_dir / f"{idx}_target.yaml"
-            result = yaml_dir / f"{idx}_result.yaml"
+            result = f"{idx}_result"
 
             print(f"  {gme.name}...", end=" ", flush=True)
             t_ok = export_with_tttool(gme, target, tttool)
-            r_ok = export_with_tiptoi_tools(gme, result)
+            r_ok = export_with_tiptoi_tools(gme, yaml_dir, result)
             print(
                 f"tttool={'ok' if t_ok else 'FAIL'} tiptoi-tools={'ok' if r_ok else 'FAIL'}"
             )
