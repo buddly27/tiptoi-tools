@@ -1,5 +1,4 @@
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -19,10 +18,7 @@ from tiptoi_tools.binary import (
 from tiptoi_tools.games import Game
 from tiptoi_tools.games import decode as decode_games
 from tiptoi_tools.games import serialize as serialize_game
-from tiptoi_tools.media import MediaEntry
-from tiptoi_tools.media import DEFAULT_XOR_KEY
-from tiptoi_tools.media import decode as decode_media_entries
-from tiptoi_tools.media import encode as encode_media_entries
+from tiptoi_tools.media import DEFAULT_XOR_KEY, MediaTable
 from tiptoi_tools.playlist import Playlist, PlaylistTable
 from tiptoi_tools.scripts import ScriptTable
 
@@ -95,7 +91,7 @@ class ParsedGme:
 
     header: GmeHeader
     registers: list[int]
-    media_entries: list[MediaEntry]
+    media_table: MediaTable
     duplicated_table: Similarity
     welcome_sounds: PlaylistTable
     binary_tables_entries: tuple[int, int, int]
@@ -118,7 +114,7 @@ def decode(data: bytes) -> ParsedGme:
     registers = _decode_registers(data, header.register_init_offset)
 
     additional_media_offset = _decode_additional_media_table_offset(data)
-    media_entries = decode_media_entries(
+    media_table = MediaTable.decode(
         data,
         header.media_table_offset,
         stop_at=additional_media_offset,
@@ -126,7 +122,7 @@ def decode(data: bytes) -> ParsedGme:
     duplication = _detect_media_table_duplication(
         data,
         header.media_table_offset,
-        offset_end=min(e.offset for e in media_entries),
+        offset_end=min(e.offset for e in media_table),
     )
 
     welcome_offset = (
@@ -163,7 +159,7 @@ def decode(data: bytes) -> ParsedGme:
     return ParsedGme(
         header=header,
         registers=registers,
-        media_entries=media_entries,
+        media_table=media_table,
         duplicated_table=duplication,
         welcome_sounds=welcome_sounds,
         binary_tables_entries=binary_tables_entries,
@@ -199,7 +195,7 @@ def encode(parsed: ParsedGme, audio_files: list[bytes]) -> bytes:
 
     # Write media table
     media_table_offset = w.offset
-    encode_media_entries(w, audio_files, header.raw_xor or DEFAULT_XOR_KEY)
+    MediaTable.encode(w, audio_files, header.raw_xor or DEFAULT_XOR_KEY)
 
     # Write register init
     register_init_offset = w.offset
@@ -353,7 +349,7 @@ def import_yaml(yaml_path: Path) -> tuple[ParsedGme, list[bytes]]:
     parsed = ParsedGme(
         header=header,
         registers=init_registers,
-        media_entries=[],  # Not needed for encoding
+        media_table=MediaTable(entries=()),  # Not needed for encoding
         duplicated_table=Similarity.ABSENT,
         welcome_sounds=welcome_table,
         binary_tables_entries=(0, 0, 0),

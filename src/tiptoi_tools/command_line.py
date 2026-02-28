@@ -106,9 +106,9 @@ def info_cmd(ctx: FileContext) -> None:
 
     welcome = parsed.welcome_sounds.serialize(collapse=True)
     click.echo(f"Welcome sounds: @{welcome}" if welcome else "Welcome sounds: (none)")
-    click.echo(f"Audio table entries: {len(parsed.media_entries)}")
+    click.echo(f"Audio table entries: {len(parsed.media_table)}")
     click.echo(f"Audio table copy: {parsed.duplicated_table.value}")
-    click.echo(f"Audio XOR values: {_print_audio_xors(parsed.media_entries)}")
+    click.echo(f"Audio XOR values: {_print_audio_xors(parsed.media_table)}")
 
     b1, b2, b3 = parsed.binary_tables_entries
     click.echo(f"Binary tables entries: {b1}/{b2}/{b3}")
@@ -201,7 +201,7 @@ def export_cmd(
 def _extract_media(ctx: FileContext, out_dir: Path, prefix: str) -> None:
     """Extract media files with the given prefix."""
     parsed = ctx.parsed
-    entries = parsed.media_entries
+    entries = parsed.media_table
 
     if not entries:
         click.echo("No media files to extract.")
@@ -361,11 +361,11 @@ def play_cmd(
         click.echo(f"Audio player: {tiptoi_tools.audio.get_player_info()}")
 
     for idx in media_indices:
-        if idx < 0 or idx >= len(parsed.media_entries):
+        if idx < 0 or idx >= len(parsed.media_table):
             click.echo(f"  [{idx}] Invalid media index (skipping)")
             continue
 
-        entry = parsed.media_entries[idx]
+        entry = parsed.media_table[idx]
         if entry.length == 0:
             click.echo(f"  [{idx}] Empty media entry (skipping)")
             continue
@@ -592,7 +592,7 @@ def _game_type_name(game_type: int) -> str:
     }.get(game_type, "Unknown")
 
 
-def _print_audio_xors(entries: list[tiptoi_tools.gme.MediaEntry]) -> str:
+def _print_audio_xors(entries: tiptoi_tools.media.MediaTable) -> str:
     xors = sorted({e.magic_xor for e in entries})
     if not xors:
         return "[]"
