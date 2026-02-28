@@ -24,11 +24,7 @@ from tiptoi_tools.media import DEFAULT_XOR_KEY
 from tiptoi_tools.media import decode as decode_media_entries
 from tiptoi_tools.media import encode as encode_media_entries
 from tiptoi_tools.playlist import Playlist, PlaylistTable
-from tiptoi_tools.scripts import ActionKind, ScriptLine, ScriptTable
-from tiptoi_tools.scripts import decode as decode_scripts
-from tiptoi_tools.scripts import encode as encode_scripts
-from tiptoi_tools.scripts import serialize as serialize_scripts
-from tiptoi_tools.scripts import deserialize as deserialize_scripts
+from tiptoi_tools.scripts import ScriptTable
 
 # GME file header layout
 HEADER_END = 0x60
@@ -158,7 +154,7 @@ def decode(data: bytes) -> ParsedGme:
 
     special_oids = _decode_special_oids(data, OFFSET_SPECIAL_OIDS)
 
-    script_table = decode_scripts(data, header.script_table_offset)
+    script_table = ScriptTable.decode(data, header.script_table_offset)
     games = decode_games(data, header.game_table_offset)
 
     checksum_found = u32le(data, len(data) - 4)
@@ -199,7 +195,7 @@ def encode(parsed: ParsedGme, audio_files: list[bytes]) -> bytes:
 
     # Write script table
     script_table_offset = w.offset
-    encode_scripts(w, parsed.script_table)
+    parsed.script_table.encode(w)
 
     # Write media table
     media_table_offset = w.offset
@@ -259,7 +255,7 @@ def serialize(
         "welcome": welcome,
         "media-path": media_path,
         "init": _serialize_registers(parsed.registers),
-        "scripts": serialize_scripts(parsed.script_table.scripts),
+        "scripts": parsed.script_table.serialize(),
         "games": [serialize_game(g) for g in parsed.games],
     }
 
@@ -321,37 +317,14 @@ def import_yaml(yaml_path: Path) -> tuple[ParsedGme, list[bytes]]:
     if replay is not None and stop is not None:
         special_oids = (OID(int(replay)), OID(int(stop)))
 
-    # Scripts - parse to intermediate form, then convert to ScriptLine dataclasses
-    scripts_raw = raw.get("scripts", {})
-    script_lines = deserialize_scripts(scripts_raw)
-
-    first_oid = OID(min(script_lines.keys())) if script_lines else OID(0)
-    last_oid = OID(max(script_lines.keys())) if script_lines else OID(0)
-
-    # Compute active_oids and game_starters
-    active_oids: list[OID] = []
-    game_starters: list[tuple[OID, int]] = []
-    for oid, lines in script_lines.items():
-        if lines:
-            active_oids.append(oid)
-            for line in lines:
-                for action in line.actions:
-                    if action.kind == ActionKind.START_GAME:
-                        game_starters.append((oid, int(action.payload)))
-
-    script_table = ScriptTable(
-        first_oid=first_oid,
-        last_oid=last_oid,
-        scripts=script_lines,
-        active_oids=active_oids,
-        game_starters=game_starters,
-    )
+    # Scripts
+    script_table = ScriptTable.deserialize(raw.get("scripts", {}))
 
     # Games (TODO: full game parsing)
     games_raw = raw.get("games", [])
 
     # Collect all audio indices from scripts, welcome, and games
-    audio_indices = _collect_audio_indices(script_lines, welcome, games_raw)
+    audio_indices = _collect_audio_indices(script_table.scripts, welcome, games_raw)
 
     # Load audio files
     audio_files = _load_audio_files(base_dir, media_path, audio_indices)
@@ -607,16 +580,17 @@ def _encode_header(
 
 
 def _collect_audio_indices(
-    scripts: dict[int, list[ScriptLine]],
+    scripts: dict,
     welcome: Playlist,
     games: list[dict],
 ) -> set[int]:
     """Collect all audio indices from scripts, welcome, and games."""
     indices: set[int] = set()
 
-    for lines in scripts.values():
-        for line in lines:
-            indices.update(line.audio_links)
+    for script in scripts.values():
+        if script:
+            for line in script:
+                indices.update(line.audio_links)
 
     indices.update(welcome)
 
