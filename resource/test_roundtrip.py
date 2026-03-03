@@ -32,9 +32,6 @@ class RoundtripResult:
 
     success: bool
     message: str
-    gme_identical: bool | None  # None if not compared
-    gme_size_original: int
-    gme_size_rebuilt: int
     temp_dir: Path | None
 
 
@@ -74,7 +71,6 @@ def test_roundtrip(gme_path: Path, keep_temp: bool = False) -> RoundtripResult:
     """
     tmpdir = None
     try:
-        original_size = gme_path.stat().st_size
         name = gme_path.stem
 
         # Create temp directory
@@ -94,9 +90,6 @@ def test_roundtrip(gme_path: Path, keep_temp: bool = False) -> RoundtripResult:
             return RoundtripResult(
                 success=False,
                 message=f"Export failed: {extract_error(result.stderr)}",
-                gme_identical=None,
-                gme_size_original=original_size,
-                gme_size_rebuilt=0,
                 temp_dir=tmpdir if keep_temp else None,
             )
 
@@ -105,9 +98,6 @@ def test_roundtrip(gme_path: Path, keep_temp: bool = False) -> RoundtripResult:
             return RoundtripResult(
                 success=False,
                 message=f"Export did not create {yaml_path.name}",
-                gme_identical=None,
-                gme_size_original=original_size,
-                gme_size_rebuilt=0,
                 temp_dir=tmpdir if keep_temp else None,
             )
 
@@ -124,9 +114,6 @@ def test_roundtrip(gme_path: Path, keep_temp: bool = False) -> RoundtripResult:
             return RoundtripResult(
                 success=False,
                 message=f"Build failed: {extract_error(result.stderr)}",
-                gme_identical=None,
-                gme_size_original=original_size,
-                gme_size_rebuilt=0,
                 temp_dir=tmpdir if keep_temp else None,
             )
 
@@ -134,18 +121,8 @@ def test_roundtrip(gme_path: Path, keep_temp: bool = False) -> RoundtripResult:
             return RoundtripResult(
                 success=False,
                 message="Build did not create GME file",
-                gme_identical=None,
-                gme_size_original=original_size,
-                gme_size_rebuilt=0,
                 temp_dir=tmpdir if keep_temp else None,
             )
-
-        rebuilt_size = rebuilt_gme.stat().st_size
-
-        # Compare GME binary content
-        original_data = gme_path.read_bytes()
-        rebuilt_data = rebuilt_gme.read_bytes()
-        gme_identical = original_data == rebuilt_data
 
         # Step 3: Export rebuilt GME to YAML (no media)
         # Export to subdirectory with same name so media-path matches
@@ -166,9 +143,6 @@ def test_roundtrip(gme_path: Path, keep_temp: bool = False) -> RoundtripResult:
             return RoundtripResult(
                 success=False,
                 message=f"Re-export failed: {extract_error(result.stderr)}",
-                gme_identical=gme_identical,
-                gme_size_original=original_size,
-                gme_size_rebuilt=rebuilt_size,
                 temp_dir=tmpdir if keep_temp else None,
             )
 
@@ -176,9 +150,6 @@ def test_roundtrip(gme_path: Path, keep_temp: bool = False) -> RoundtripResult:
             return RoundtripResult(
                 success=False,
                 message="Re-export did not create YAML file",
-                gme_identical=gme_identical,
-                gme_size_original=original_size,
-                gme_size_rebuilt=rebuilt_size,
                 temp_dir=tmpdir if keep_temp else None,
             )
 
@@ -192,9 +163,6 @@ def test_roundtrip(gme_path: Path, keep_temp: bool = False) -> RoundtripResult:
             result = RoundtripResult(
                 success=False,
                 message=f"YAML differs ({diff_lines} diff lines)",
-                gme_identical=gme_identical,
-                gme_size_original=original_size,
-                gme_size_rebuilt=rebuilt_size,
                 temp_dir=tmpdir if keep_temp else None,
             )
             if not keep_temp:
@@ -202,24 +170,13 @@ def test_roundtrip(gme_path: Path, keep_temp: bool = False) -> RoundtripResult:
             return result
 
         # Success - clean up
-        result = RoundtripResult(
-            success=True,
-            message="OK",
-            gme_identical=gme_identical,
-            gme_size_original=original_size,
-            gme_size_rebuilt=rebuilt_size,
-            temp_dir=None,
-        )
         shutil.rmtree(tmpdir)
-        return result
+        return RoundtripResult(success=True, message="OK", temp_dir=None)
 
     except Exception as e:
         return RoundtripResult(
             success=False,
             message=f"Error: {type(e).__name__}: {e}",
-            gme_identical=None,
-            gme_size_original=0,
-            gme_size_rebuilt=0,
             temp_dir=tmpdir if (tmpdir and keep_temp) else None,
         )
 
@@ -275,16 +232,6 @@ def resolve_path(cli_path: str | None, env_var: str, name: str) -> Path | None:
     return None
 
 
-def format_size(size: int) -> str:
-    """Format byte size as human-readable string."""
-    if size < 1024:
-        return f"{size}B"
-    elif size < 1024 * 1024:
-        return f"{size / 1024:.1f}KB"
-    else:
-        return f"{size / (1024 * 1024):.1f}MB"
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Test GME -> YAML -> GME -> YAML roundtrip"
@@ -330,35 +277,18 @@ def main():
     passed = 0
     failed = 0
     failures = []
-    gme_identical_count = 0
     keep_temp = args.keep_temp or args.stop_on_fail or args.diff
 
     for i, gme_file in enumerate(gme_files):
         result = test_roundtrip(gme_file, keep_temp)
 
-        # GME comparison status
-        if result.gme_identical:
-            gme_status = "GME=identical"
-            gme_identical_count += 1
-        elif result.gme_identical is False:
-            size_diff = result.gme_size_rebuilt - result.gme_size_original
-            sign = "+" if size_diff >= 0 else ""
-            orig = format_size(result.gme_size_original)
-            rebuilt = format_size(result.gme_size_rebuilt)
-            gme_status = f"GME=differ ({orig}->{rebuilt}, {sign}{size_diff})"
-        else:
-            gme_status = "GME=?"
-
         if result.success:
             passed += 1
-            print(f"[{i + 1}/{len(gme_files)}] PASS {gme_file.name} ({gme_status})")
+            print(f"[{i + 1}/{len(gme_files)}] PASS {gme_file.name}")
         else:
             failed += 1
             failures.append((gme_file, result))
-            print(
-                f"[{i + 1}/{len(gme_files)}] FAIL {gme_file.name}: "
-                f"{result.message} ({gme_status})"
-            )
+            print(f"[{i + 1}/{len(gme_files)}] FAIL {gme_file.name}: {result.message}")
 
             if args.stop_on_fail:
                 print("\nStopping at first failure.")
@@ -375,7 +305,6 @@ def main():
     print()
     print("=" * 60)
     print(f"Results: {passed}/{len(gme_files)} passed ({failed} failed)")
-    print(f"GME identical: {gme_identical_count}/{len(gme_files)}")
     print("=" * 60)
 
     if failures:
