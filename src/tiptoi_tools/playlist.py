@@ -100,3 +100,22 @@ class PlaylistTable:
         for i, playlist in enumerate(self.playlists):
             w.u32_at(pointer_base + i * 4, w.offset)
             w.u16_list(list(playlist.indices))
+
+    @classmethod
+    def deserialize(cls, data: Any) -> "PlaylistTable":
+        """
+        Deserialize a playlist table from YAML data.
+
+        Handles both collapsed format (single string) and list format.
+        """
+        if data is None or data == []:
+            return cls(playlists=())
+
+        if isinstance(data, (str, int)):
+            # Collapsed single playlist
+            return cls(playlists=(Playlist.deserialize(data),))
+
+        if isinstance(data, list):
+            return cls(playlists=tuple(Playlist.deserialize(item) for item in data))
+
+        return cls(playlists=())

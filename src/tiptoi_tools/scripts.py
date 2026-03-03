@@ -672,9 +672,8 @@ class Script:
             return cls(lines=())
         elif isinstance(data, list):
             lines = [
-                ScriptLine.deserialize(line)
+                ScriptLine.deserialize(str(line) if line else "")
                 for line in data
-                if line and str(line).strip()
             ]
             return cls(lines=tuple(lines))
         return cls(lines=())

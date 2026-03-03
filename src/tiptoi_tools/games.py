@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from tiptoi_tools.binary import OID, BinaryReader
+from tiptoi_tools.binary import OID, BinaryReader, BinaryWriter
 from tiptoi_tools.playlist import PlaylistTable
 
 # Game type constants
@@ -102,6 +102,57 @@ class SubGame:
                 }.items()
             )
         )
+
+    @classmethod
+    def deserialize(cls, data: dict[str, Any]) -> "SubGame":
+        """Deserialize a subgame from YAML data."""
+
+        def parse_oids(s: str) -> list[OID]:
+            if not s or not s.strip():
+                return []
+            return [OID(int(x)) for x in s.split()]
+
+        def parse_header(s: str) -> bytes:
+            if not s or not s.strip():
+                return b"\x00" * 20
+            return bytes(int(x, 16) for x in s.split())
+
+        playlists_raw = data.get("playlist", [])
+        playlists = [PlaylistTable.deserialize(pl) for pl in playlists_raw]
+        # Pad to 9 playlists if needed
+        while len(playlists) < 9:
+            playlists.append(PlaylistTable(playlists=()))
+
+        return cls(
+            header=parse_header(data.get("unknown", "")),
+            oid1s=parse_oids(data.get("oids1", "")),
+            oid2s=parse_oids(data.get("oids2", "")),
+            oid3s=parse_oids(data.get("oids3", "")),
+            playlists=playlists,
+        )
+
+    def encode(self, w: BinaryWriter) -> None:
+        """Encode this subgame to a BinaryWriter."""
+        # Write 20-byte header
+        if len(self.header) == 20:
+            w.bytes(self.header)
+        else:
+            w.bytes(self.header.ljust(20, b"\x00")[:20])
+
+        # Write OID lists
+        w.u16_list([int(oid) for oid in self.oid1s])
+        w.u16_list([int(oid) for oid in self.oid2s])
+        w.u16_list([int(oid) for oid in self.oid3s])
+
+        # Write playlist pointers (we'll need to patch these)
+        playlist_ptr_base = w.offset
+        for _ in range(9):
+            w.u32(0)
+
+        # Write playlists and patch pointers
+        for i, pl in enumerate(self.playlists[:9]):
+            w.u32_at(playlist_ptr_base + i * 4, w.offset)
+            pl.encode(w)
 
 
 @dataclass(frozen=True)
@@ -230,6 +281,301 @@ class Game:
 
         return dict(sorted(out.items()))
 
+    @classmethod
+    def deserialize(cls, data: dict[str, Any]) -> "Game":
+        """Deserialize a game from YAML data."""
+        tag = data.get("tag", "")
+
+        if tag == "Game253Yaml":
+            return cls(game_type=GAME_TYPE_SPECIAL, fields={})
+
+        # Determine game type from tag or explicit field
+        game_type = data.get("gametype", GAME_TYPE_COMMON)
+        if tag == "Game6Yaml":
+            game_type = GAME_TYPE_BONUS
+        elif tag == "Game7Yaml":
+            game_type = GAME_TYPE_GROUPED
+        elif tag == "Game8Yaml":
+            game_type = GAME_TYPE_SELECT
+        elif tag == "Game9Yaml":
+            game_type = GAME_TYPE_EXTRA_9
+        elif tag == "Game10Yaml":
+            game_type = GAME_TYPE_EXTRA_10
+        elif tag == "Game16Yaml":
+            game_type = GAME_TYPE_EXTRA_16
+
+        f: dict[str, object] = {}
+
+        # Scalar fields
+        for yaml_key, field_key in _SCALAR_FIELDS:
+            if yaml_key in data:
+                f[field_key] = data[yaml_key]
+
+        # OID list fields
+        for yaml_key, field_key in _OID_LIST_FIELDS:
+            if yaml_key in data:
+                s = data[yaml_key]
+                if s and isinstance(s, str):
+                    f[field_key] = [OID(int(x)) for x in s.split()]
+                else:
+                    f[field_key] = []
+
+        # Playlist fields
+        for yaml_key, field_key in _PLAYLIST_FIELDS:
+            if yaml_key in data:
+                f[field_key] = PlaylistTable.deserialize(data[yaml_key])
+
+        # Playlist list fields
+        for yaml_key, field_key in _PLAYLIST_LIST_FIELDS:
+            if yaml_key in data:
+                raw = data[yaml_key]
+                if isinstance(raw, list):
+                    f[field_key] = [PlaylistTable.deserialize(pl) for pl in raw]
+                else:
+                    f[field_key] = []
+
+        # Subgames
+        if "subgames" in data:
+            f["gSubgames"] = [SubGame.deserialize(sg) for sg in data["subgames"]]
+        else:
+            f["gSubgames"] = []
+
+        # Compute subgame count from the list
+        subgames = f.get("gSubgames", [])
+        bonus_count = f.get("gBonusSubgameCount", 0)
+        if game_type == GAME_TYPE_BONUS:
+            f["gSubgameCount"] = len(subgames) - bonus_count
+        else:
+            f["gSubgameCount"] = len(subgames)
+
+        return cls(game_type=game_type, fields=f)
+
+    def encode(self, w: BinaryWriter) -> None:
+        """Encode this game to a BinaryWriter."""
+        if self.game_type == GAME_TYPE_SPECIAL:
+            w.u16(GAME_TYPE_SPECIAL)
+            return
+
+        f = self.fields
+        is_bonus = self.game_type == GAME_TYPE_BONUS
+
+        # Game type
+        w.u16(self.game_type)
+
+        # Common scalars
+        w.u16(int(f.get("gSubgameCount", 0)))
+        w.u16(int(f.get("gRounds", 0)))
+        if not is_bonus:
+            w.u16(int(f.get("gUnknownC", 0)))
+
+        # Bonus-only scalars
+        if is_bonus:
+            w.u16(int(f.get("gBonusSubgameCount", 0)))
+            w.u16(int(f.get("gBonusRounds", 0)))
+            w.u16(int(f.get("gBonusTarget", 0)))
+            w.u16(int(f.get("gUnknownI", 0)))
+
+        # More common scalars
+        w.u16(int(f.get("gEarlyRounds", 0)))
+        if is_bonus:
+            w.u16(int(f.get("gUnknownQ", 0)))
+        w.u16(int(f.get("gRepeatLastMedia", 0)))
+        w.u16(int(f.get("gUnknownX", 0)))
+        w.u16(int(f.get("gUnknownW", 0)))
+        w.u16(int(f.get("gUnknownV", 0)))
+
+        # Core playlist pointers (we'll patch these)
+        playlist_ptrs: list[tuple[str, int]] = []
+
+        def write_playlist_ptr(key: str) -> None:
+            playlist_ptrs.append((key, w.offset))
+            w.u32(0)
+
+        write_playlist_ptr("gStartPlayList")
+        write_playlist_ptr("gRoundEndPlayList")
+        write_playlist_ptr("gFinishPlayList")
+        write_playlist_ptr("gRoundStartPlayList")
+        write_playlist_ptr("gLaterRoundStartPlayList")
+        if is_bonus:
+            write_playlist_ptr("gRoundStartPlayList2")
+            write_playlist_ptr("gLaterRoundStartPlayList2")
+
+        # Subgame pointers
+        subgames = f.get("gSubgames", [])
+        subgame_ptr_base = w.offset
+        for _ in subgames:
+            w.u32(0)
+
+        # Target scores
+        if is_bonus:
+            scores = f.get("gTargetScores", [0, 0])
+            for i in range(2):
+                w.u16(scores[i] if i < len(scores) else 0)
+            bonus_scores = f.get("gBonusTargetScores", [0] * 8)
+            for i in range(8):
+                w.u16(bonus_scores[i] if i < len(bonus_scores) else 0)
+        else:
+            scores = f.get("gTargetScores", [0] * 10)
+            for i in range(10):
+                w.u16(scores[i] if i < len(scores) else 0)
+
+        # Finish playlist pointers
+        finish_playlist_ptrs: list[int] = []
+        if is_bonus:
+            for _ in range(2):
+                finish_playlist_ptrs.append(w.offset)
+                w.u32(0)
+            bonus_finish_ptrs: list[int] = []
+            for _ in range(8):
+                bonus_finish_ptrs.append(w.offset)
+                w.u32(0)
+        else:
+            for _ in range(10):
+                finish_playlist_ptrs.append(w.offset)
+                w.u32(0)
+
+        # Bonus subgame IDs pointer
+        bonus_ids_ptr = 0
+        if is_bonus:
+            bonus_ids_ptr = w.offset
+            w.u32(0)
+
+        # Game type specific pointers
+        grouped_ptr = 0
+        select_oids_ptr = 0
+        select_ids_ptr = 0
+        select_err1_ptr = 0
+        select_err2_ptr = 0
+        extra_oids_ptr = 0
+        extra_playlists_ptrs: list[int] = []
+
+        if self.game_type == GAME_TYPE_GROUPED:
+            grouped_ptr = w.offset
+            w.u32(0)
+        elif self.game_type == GAME_TYPE_SELECT:
+            select_oids_ptr = w.offset
+            w.u32(0)
+            select_ids_ptr = w.offset
+            w.u32(0)
+            select_err1_ptr = w.offset
+            w.u32(0)
+            select_err2_ptr = w.offset
+            w.u32(0)
+        elif self.game_type == GAME_TYPE_EXTRA_16:
+            extra_oids_ptr = w.offset
+            w.u32(0)
+
+        extra_count = _EXTRA_PLAYLIST_COUNTS.get(self.game_type, 0)
+        for _ in range(extra_count):
+            extra_playlists_ptrs.append(w.offset)
+            w.u32(0)
+
+        # Now write actual data and patch pointers
+
+        # Core playlists
+        for key, ptr_offset in playlist_ptrs:
+            pl = f.get(key)
+            if pl is not None:
+                w.u32_at(ptr_offset, w.offset)
+                pl.encode(w)
+            else:
+                w.u32_at(ptr_offset, w.offset)
+                PlaylistTable(playlists=()).encode(w)
+
+        # Subgames
+        for i, sg in enumerate(subgames):
+            w.u32_at(subgame_ptr_base + i * 4, w.offset)
+            sg.encode(w)
+
+        # Finish playlists
+        if is_bonus:
+            finish_pls = f.get("gFinishPlayLists", [])
+            for i, ptr in enumerate(finish_playlist_ptrs):
+                w.u32_at(ptr, w.offset)
+                if i < len(finish_pls):
+                    finish_pls[i].encode(w)
+                else:
+                    PlaylistTable(playlists=()).encode(w)
+
+            bonus_finish_pls = f.get("gBonusFinishPlayLists", [])
+            for i, ptr in enumerate(bonus_finish_ptrs):
+                w.u32_at(ptr, w.offset)
+                if i < len(bonus_finish_pls):
+                    bonus_finish_pls[i].encode(w)
+                else:
+                    PlaylistTable(playlists=()).encode(w)
+
+            # Bonus subgame IDs
+            w.u32_at(bonus_ids_ptr, w.offset)
+            ids = f.get("gBonusSubgameIds", [])
+            w.u16(len(ids))
+            for game_id in ids:
+                w.u16(game_id + 1)  # Convert back to 1-indexed
+        else:
+            finish_pls = f.get("gFinishPlayLists", [])
+            for i, ptr in enumerate(finish_playlist_ptrs):
+                w.u32_at(ptr, w.offset)
+                if i < len(finish_pls):
+                    finish_pls[i].encode(w)
+                else:
+                    PlaylistTable(playlists=()).encode(w)
+
+        # Game type specific data
+        if self.game_type == GAME_TYPE_GROUPED:
+            w.u32_at(grouped_ptr, w.offset)
+            groups = f.get("gSubgameGroups", [])
+            w.u16(len(groups))
+            group_ptrs_base = w.offset
+            for _ in groups:
+                w.u32(0)
+            for i, group in enumerate(groups):
+                w.u32_at(group_ptrs_base + i * 4, w.offset)
+                w.u16(len(group))
+                for game_id in group:
+                    w.u16(game_id + 1)
+
+        elif self.game_type == GAME_TYPE_SELECT:
+            # OIDs
+            w.u32_at(select_oids_ptr, w.offset)
+            oids = f.get("gGameSelectOIDs", [])
+            w.u16_list([int(oid) for oid in oids])
+
+            # Game IDs
+            w.u32_at(select_ids_ptr, w.offset)
+            ids = f.get("gGameSelect", [])
+            w.u16(len(ids))
+            for game_id in ids:
+                w.u16(game_id + 1)
+
+            # Error playlists
+            w.u32_at(select_err1_ptr, w.offset)
+            pl1 = f.get("gGameSelectErrors1")
+            if pl1:
+                pl1.encode(w)
+            else:
+                PlaylistTable(playlists=()).encode(w)
+
+            w.u32_at(select_err2_ptr, w.offset)
+            pl2 = f.get("gGameSelectErrors2")
+            if pl2:
+                pl2.encode(w)
+            else:
+                PlaylistTable(playlists=()).encode(w)
+
+        elif self.game_type == GAME_TYPE_EXTRA_16:
+            w.u32_at(extra_oids_ptr, w.offset)
+            oids = f.get("gExtraOIDs", [])
+            w.u16_list([int(oid) for oid in oids])
+
+        # Extra playlists
+        extra_pls = f.get("gExtraPlayLists", [])
+        for i, ptr in enumerate(extra_playlists_ptrs):
+            w.u32_at(ptr, w.offset)
+            if i < len(extra_pls):
+                extra_pls[i].encode(w)
+            else:
+                PlaylistTable(playlists=()).encode(w)
+
 
 class GameReader(BinaryReader):
     """BinaryReader extended with game-specific parsing methods."""
@@ -311,6 +657,31 @@ class GameTable:
     def serialize(self) -> list[dict[str, Any]]:
         """Serialize all games to a list of dictionaries for YAML output."""
         return [g.serialize() for g in self.games]
+
+    @classmethod
+    def deserialize(cls, data: list[dict[str, Any]]) -> "GameTable":
+        """Deserialize a game table from YAML data."""
+        if not data:
+            return cls(games=())
+        return cls(games=tuple(Game.deserialize(g) for g in data))
+
+    def encode(self, w: BinaryWriter) -> None:
+        """Encode the game table to a BinaryWriter."""
+        if not self.games:
+            return
+
+        # Write game count
+        w.u32(len(self.games))
+
+        # Write game pointer placeholders
+        game_ptr_base = w.offset
+        for _ in self.games:
+            w.u32(0)
+
+        # Write each game and patch its pointer
+        for i, game in enumerate(self.games):
+            w.u32_at(game_ptr_base + i * 4, w.offset)
+            game.encode(w)
 
 
 def _tag_for_game_type(game_type: int) -> str:

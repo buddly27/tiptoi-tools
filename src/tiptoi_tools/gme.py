@@ -17,7 +17,7 @@ from tiptoi_tools.binary import (
 )
 from tiptoi_tools.games import GameTable
 from tiptoi_tools.media import DEFAULT_XOR_KEY, MediaTable
-from tiptoi_tools.playlist import Playlist, PlaylistTable
+from tiptoi_tools.playlist import PlaylistTable
 from tiptoi_tools.scripts import ScriptTable
 
 # GME file header layout
@@ -210,6 +210,12 @@ def encode(parsed: ParsedGme, audio_files: list[bytes]) -> bytes:
         w.u16(parsed.special_oids[0])
         w.u16(parsed.special_oids[1])
 
+    # Write game table
+    game_table_offset = 0
+    if parsed.game_table.games:
+        game_table_offset = w.offset
+        parsed.game_table.encode(w)
+
     # Write checksum placeholder
     checksum_offset = w.offset
     w.u32(0)
@@ -223,6 +229,7 @@ def encode(parsed: ParsedGme, audio_files: list[bytes]) -> bytes:
         register_init_offset,
         welcome_offset,
         special_oids_offset,
+        game_table_offset,
     )
 
     # Calculate and write checksum
@@ -300,9 +307,9 @@ def import_yaml(yaml_path: Path) -> tuple[ParsedGme, list[bytes]]:
         init_registers = _deserialize_registers(init_str)
 
     # Welcome sounds
-    welcome = Playlist()
+    welcome_table = PlaylistTable(playlists=())
     if welcome_raw := raw.get("welcome"):
-        welcome = Playlist.serialize(welcome_raw)
+        welcome_table = PlaylistTable.deserialize(welcome_raw)
 
     # Special OIDs
     special_oids: tuple[OID, OID] | None = None
@@ -318,7 +325,9 @@ def import_yaml(yaml_path: Path) -> tuple[ParsedGme, list[bytes]]:
     games_raw = raw.get("games", [])
 
     # Collect all audio indices from scripts, welcome, and games
-    audio_indices = _collect_audio_indices(script_table.scripts, welcome, games_raw)
+    audio_indices = _collect_audio_indices(
+        script_table.scripts, welcome_table, games_raw
+    )
 
     # Load audio files
     audio_files = _load_audio_files(base_dir, media_path, audio_indices)
@@ -337,12 +346,6 @@ def import_yaml(yaml_path: Path) -> tuple[ParsedGme, list[bytes]]:
         language_string=lang,
     )
 
-    # Build welcome PlaylistTable
-    if welcome:
-        welcome_table = PlaylistTable(playlists=(Playlist(indices=tuple(welcome)),))
-    else:
-        welcome_table = PlaylistTable(playlists=())
-
     # Build ParsedGme
     parsed = ParsedGme(
         header=header,
@@ -354,7 +357,7 @@ def import_yaml(yaml_path: Path) -> tuple[ParsedGme, list[bytes]]:
         single_binary_tables_entries=(0, 0, 0),
         special_oids=special_oids,
         script_table=script_table,
-        game_table=GameTable(games=()),  # TODO: parse games
+        game_table=GameTable.deserialize(games_raw),
         checksum_found=0,
         checksum_calculated=0,
     )
@@ -544,6 +547,7 @@ def _encode_header(
     register_init_offset: int,
     welcome_offset: int,
     special_oids_offset: int,
+    game_table_offset: int,
 ) -> None:
     """Encode the GME header by patching values at fixed offsets."""
     # Core pointers
@@ -551,7 +555,7 @@ def _encode_header(
     w.u32_at(OFFSET_MEDIA_TABLE, media_table_offset)
     w.u32_at(OFFSET_MAGIC, GME_MAGIC)
     w.u32_at(OFFSET_ADDITIONAL_SCRIPT_TABLE, script_table_offset)
-    w.u32_at(OFFSET_GAME_TABLE, 0)
+    w.u32_at(OFFSET_GAME_TABLE, game_table_offset)
     w.u32_at(OFFSET_PRODUCT_ID, header.product_id_code)
     w.u32_at(OFFSET_REGISTER_INIT, register_init_offset)
     w.u32_at(OFFSET_RAW_XOR, header.raw_xor or DEFAULT_XOR_KEY)
@@ -575,7 +579,7 @@ def _encode_header(
 
 def _collect_audio_indices(
     scripts: dict,
-    welcome: Playlist,
+    welcome: PlaylistTable,
     games: list[dict],
 ) -> set[int]:
     """Collect all audio indices from scripts, welcome, and games."""
@@ -586,7 +590,8 @@ def _collect_audio_indices(
             for line in script:
                 indices.update(line.audio_links)
 
-    indices.update(welcome)
+    for playlist in welcome:
+        indices.update(playlist.indices)
 
     for game in games:
         _collect_indices_from_game(game, indices)
