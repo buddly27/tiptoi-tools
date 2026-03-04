@@ -290,6 +290,7 @@ def play_cmd(
 ) -> None:
     """Play audio by OID or media index.
 
+    \b
     TARGET can be:
       123      - Play audio for OID 123
       @456     - Play media index 456 directly
