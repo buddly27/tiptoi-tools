@@ -535,13 +535,7 @@ def scripts_cmd(
             actions_str = actions_str[:32] + "..."
 
         audio_refs = info["media_refs"]
-        if len(audio_refs) == 0:
-            audio_str = "[]"
-        elif len(audio_refs) <= 3:
-            audio_str = "@" + ",".join(str(m) for m in sorted(audio_refs))
-        else:
-            sorted_refs = sorted(audio_refs)
-            audio_str = f"@{sorted_refs[0]}..{sorted_refs[-1]} ({len(audio_refs)})"
+        audio_str = _format_int_list(audio_refs, threshold=3, prefix="@", empty="[]")
 
         click.echo(
             f"{info['oid']:<8} {info['line_count']:<6} {actions_str:<35} {audio_str}"
@@ -748,12 +742,10 @@ def _show_oid_summary(parsed) -> None:
             click.echo(f"  Game {game_idx} ({type_name}): {total} OIDs")
             for oid_type, oid_list in oids_by_type.items():
                 if oid_list:
-                    if len(oid_list) <= 5:
-                        oid_str = ", ".join(str(o) for o in oid_list)
-                    else:
-                        oid_str = (
-                            f"{min(oid_list)}-{max(oid_list)} ({len(oid_list)} OIDs)"
-                        )
+                    oid_str = _format_int_list(
+                        oid_list, threshold=5, sep=", ",
+                        collapse_sep="-", suffix=" OIDs",
+                    )
                     click.echo(f"    {oid_type}: {oid_str}")
 
     if parsed.script_table.game_starters:
@@ -793,11 +785,10 @@ def _lookup_oid(parsed, oid: int) -> None:
             if info["actions"]:
                 click.echo(f"    Actions: {', '.join(sorted(info['actions']))}")
             if info["media_refs"]:
-                refs = sorted(info["media_refs"])
-                if len(refs) <= 5:
-                    click.echo(f"    Audio: @{','.join(str(r) for r in refs)}")
-                else:
-                    click.echo(f"    Audio: @{refs[0]}..{refs[-1]} ({len(refs)} files)")
+                refs_str = _format_int_list(
+                    info["media_refs"], threshold=5, prefix="@", suffix=" files"
+                )
+                click.echo(f"    Audio: {refs_str}")
 
             # Check if this script starts a game
             for line in lines:
@@ -870,13 +861,30 @@ def _show_game_oids(parsed, game_idx: int) -> None:
                     click.echo(f"      oid3s: {oids_str}")
 
 
-def _format_oid_list(oids: list[int]) -> str:
+def _format_int_list(
+    items: list | tuple | set,
+    threshold: int = 5,
+    prefix: str = "",
+    sep: str = ",",
+    collapse_sep: str = "..",
+    suffix: str = "",
+    empty: str = "(none)",
+) -> str:
+    """Format a list of integers for display, collapsing if above threshold."""
+    if not items:
+        return empty
+    sorted_items = sorted(items)
+    if len(sorted_items) <= threshold:
+        return prefix + sep.join(str(x) for x in sorted_items)
+    first, last = sorted_items[0], sorted_items[-1]
+    return f"{prefix}{first}{collapse_sep}{last} ({len(sorted_items)}{suffix})"
+
+
+def _format_oid_list(oids: list[int] | tuple[int, ...]) -> str:
     """Format a list of OIDs for display."""
-    if not oids:
-        return "(none)"
-    if len(oids) <= 8:
-        return " ".join(str(o) for o in oids)
-    return f"{oids[0]}-{oids[-1]} ({len(oids)} OIDs)"
+    return _format_int_list(
+        oids, threshold=8, sep=" ", collapse_sep="-", suffix=" OIDs"
+    )
 
 
 def _collect_game_oids(parsed) -> dict[int, dict[str, list[int]]]:
