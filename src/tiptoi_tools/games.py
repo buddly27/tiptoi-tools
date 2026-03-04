@@ -82,15 +82,15 @@ class SubGame:
     """A subgame within a game, containing OID lists and playlists."""
 
     header: bytes
-    oid1s: list[OID]
-    oid2s: list[OID]
-    oid3s: list[OID]
-    playlists: list[PlaylistTable]
+    oid1s: tuple[OID, ...]
+    oid2s: tuple[OID, ...]
+    oid3s: tuple[OID, ...]
+    playlists: tuple[PlaylistTable, ...]
 
     def serialize(self) -> dict[str, Any]:
         """Serialize this subgame to a dictionary for YAML output."""
 
-        def oid_str(xs: list[OID]) -> str:
+        def oid_str(xs: tuple[OID, ...]) -> str:
             return " ".join(str(x) for x in xs) if xs else ""
 
         playlists = [pl.serialize(collapse=True) for pl in self.playlists]
@@ -110,10 +110,10 @@ class SubGame:
     def deserialize(cls, data: dict[str, Any]) -> "SubGame":
         """Deserialize a subgame from YAML data."""
 
-        def parse_oids(s: str) -> list[OID]:
+        def parse_oids(s: str) -> tuple[OID, ...]:
             if not s or not s.strip():
-                return []
-            return [OID(int(x)) for x in s.split()]
+                return ()
+            return tuple(OID(int(x)) for x in s.split())
 
         def parse_header(s: str) -> bytes:
             if not s or not s.strip():
@@ -131,7 +131,7 @@ class SubGame:
             oid1s=parse_oids(data.get("oids1", "")),
             oid2s=parse_oids(data.get("oids2", "")),
             oid3s=parse_oids(data.get("oids3", "")),
-            playlists=playlists,
+            playlists=tuple(playlists),
         )
 
     def encode(self, w: BinaryWriter) -> None:
@@ -619,10 +619,10 @@ class GameReader(BinaryReader):
         r.skip(SUBGAME_HEADER_SIZE)
         return SubGame(
             header=header,
-            oid1s=[OID(x) for x in r.u16_list()],
-            oid2s=[OID(x) for x in r.u16_list()],
-            oid3s=[OID(x) for x in r.u16_list()],
-            playlists=[r.playlist() for _ in range(9)],
+            oid1s=tuple(OID(x) for x in r.u16_list()),
+            oid2s=tuple(OID(x) for x in r.u16_list()),
+            oid3s=tuple(OID(x) for x in r.u16_list()),
+            playlists=tuple(r.playlist() for _ in range(9)),
         )
 
 
