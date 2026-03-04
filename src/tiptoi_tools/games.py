@@ -14,6 +14,9 @@ GAME_TYPE_EXTRA_10 = 10
 GAME_TYPE_EXTRA_16 = 16
 GAME_TYPE_SPECIAL = 253
 
+# Subgame structure constants
+SUBGAME_HEADER_SIZE = 20
+
 _EXTRA_PLAYLIST_COUNTS: dict[int, int] = {
     GAME_TYPE_EXTRA_9: 75,
     GAME_TYPE_EXTRA_10: 1,
@@ -114,7 +117,7 @@ class SubGame:
 
         def parse_header(s: str) -> bytes:
             if not s or not s.strip():
-                return b"\x00" * 20
+                return b"\x00" * SUBGAME_HEADER_SIZE
             return bytes(int(x, 16) for x in s.split())
 
         playlists_raw = data.get("playlist", [])
@@ -133,11 +136,12 @@ class SubGame:
 
     def encode(self, w: BinaryWriter) -> None:
         """Encode this subgame to a BinaryWriter."""
-        # Write 20-byte header
-        if len(self.header) == 20:
+        # Write subgame header
+        if len(self.header) == SUBGAME_HEADER_SIZE:
             w.bytes(self.header)
         else:
-            w.bytes(self.header.ljust(20, b"\x00")[:20])
+            padded = self.header.ljust(SUBGAME_HEADER_SIZE, b"\x00")
+            w.bytes(padded[:SUBGAME_HEADER_SIZE])
 
         # Write OID lists
         w.u16_list([int(oid) for oid in self.oid1s])
@@ -611,8 +615,8 @@ class GameReader(BinaryReader):
         """Read a subgame structure via pointer."""
         ptr = self.u32()
         r = GameReader(self.data, ptr)
-        header = self.data[ptr : ptr + 20]
-        r.skip(20)
+        header = self.data[ptr : ptr + SUBGAME_HEADER_SIZE]
+        r.skip(SUBGAME_HEADER_SIZE)
         return SubGame(
             header=header,
             oid1s=[OID(x) for x in r.u16_list()],

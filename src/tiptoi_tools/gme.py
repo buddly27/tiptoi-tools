@@ -321,7 +321,7 @@ def import_yaml(yaml_path: Path) -> tuple[ParsedGme, list[bytes]]:
     # Scripts
     script_table = ScriptTable.deserialize(raw.get("scripts", {}))
 
-    # Games (TODO: full game parsing)
+    # Games
     games_raw = raw.get("games", [])
 
     # Collect all audio indices from scripts, welcome, and games

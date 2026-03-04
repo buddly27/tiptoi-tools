@@ -1,6 +1,6 @@
 import re
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, TypeAlias
 
@@ -26,10 +26,6 @@ class CompareOp(Enum):
 
     @property
     def opcode(self) -> bytes:
-        return self._opcode
-
-    def encode(self) -> bytes:
-        """Encode this comparison operator to its opcode bytes."""
         return self._opcode
 
     @classmethod
@@ -336,9 +332,9 @@ class ScriptLine:
     """A single line in a script: conditions, actions, and audio links."""
 
     offset: int = 0
-    conditions: list[Condition] = field(default_factory=list)
-    actions: list[Action] = field(default_factory=list)
-    audio_links: list[int] = field(default_factory=list)
+    conditions: tuple[Condition, ...] = ()
+    actions: tuple[Action, ...] = ()
+    audio_links: tuple[int, ...] = ()
 
     def serialize(self) -> str:
         """Serialize this script line: conditions followed by actions."""
@@ -454,15 +450,17 @@ class ScriptLine:
 
         return cls(
             offset=line_offset,
-            conditions=conditions,
-            actions=actions,
-            audio_links=audio_links,
+            conditions=tuple(conditions),
+            actions=tuple(actions),
+            audio_links=tuple(audio_links),
         )
 
     @classmethod
     def deserialize(cls, line_str: str) -> "ScriptLine":
         """Parse a single script line."""
-        line = cls()
+        conditions: list[Condition] = []
+        actions: list[Action] = []
+        audio_links: list[int] = []
         parts = line_str.split()
 
         i = 0
@@ -473,7 +471,7 @@ class ScriptLine:
             if part.endswith("?"):
                 cond = Condition.deserialize(part[:-1])
                 if cond:
-                    line.conditions.append(cond)
+                    conditions.append(cond)
                 i += 1
                 continue
 
@@ -482,46 +480,50 @@ class ScriptLine:
                 combined = part + parts[i + 1][:-1]
                 cond = Condition.deserialize(combined)
                 if cond:
-                    line.conditions.append(cond)
+                    conditions.append(cond)
                     i += 2
                     continue
 
             # Action
-            result = cls._deserialize_action(part, parts, i, line)
+            result = cls._deserialize_action(part, parts, i, audio_links)
             if result:
-                cmd, consumed = result
-                line.actions.append(cmd)
+                action, consumed = result
+                actions.append(action)
                 i += consumed
                 continue
 
             i += 1
 
-        return line
+        return cls(
+            conditions=tuple(conditions),
+            actions=tuple(actions),
+            audio_links=tuple(audio_links),
+        )
 
     @classmethod
     def _deserialize_action(
-        cls, part: str, parts: list[str], i: int, line: "ScriptLine"
+        cls, part: str, parts: list[str], i: int, audio_links: list[int]
     ) -> tuple[Action, int] | None:
         """Parse an action, returning (Action, tokens_consumed) or None."""
         if part.startswith("P*("):
             return cls._deserialize_play_variant(
-                part, parts, i, line, ActionKind.PLAY_VARIANT_RANDOM
+                part, parts, i, audio_links, ActionKind.PLAY_VARIANT_RANDOM
             )
 
         if part.startswith("PA*("):
             return cls._deserialize_play_variant(
-                part, parts, i, line, ActionKind.PLAY_VARIANT_ALL
+                part, parts, i, audio_links, ActionKind.PLAY_VARIANT_ALL
             )
 
         if part.startswith("P(") and part.endswith(")"):
             content = part[2:-1]
             indices = [int(x.strip()) for x in content.split(",")]
-            start_idx = len(line.audio_links)
-            line.audio_links.extend(indices)
+            start_idx = len(audio_links)
+            audio_links.extend(indices)
             if len(indices) == 1:
                 return Action(ActionKind.PLAY_MEDIA, payload=start_idx), 1
             else:
-                end_idx = len(line.audio_links) - 1
+                end_idx = len(audio_links) - 1
                 return Action(
                     ActionKind.PLAY_MEDIA_RANGE, payload=(start_idx, end_idx)
                 ), 1
@@ -529,9 +531,9 @@ class ScriptLine:
         if part.startswith("PA(") and part.endswith(")"):
             content = part[3:-1]
             indices = [int(x.strip()) for x in content.split(",")]
-            start_idx = len(line.audio_links)
-            line.audio_links.extend(indices)
-            end_idx = len(line.audio_links) - 1
+            start_idx = len(audio_links)
+            audio_links.extend(indices)
+            end_idx = len(audio_links) - 1
             return Action(
                 ActionKind.PLAY_RANDOM_IN_RANGE, payload=(start_idx, end_idx)
             ), 1
@@ -575,7 +577,7 @@ class ScriptLine:
         part: str,
         parts: list[str],
         i: int,
-        line: "ScriptLine",
+        audio_links: list[int],
         kind: ActionKind,
     ) -> tuple[Action, int] | None:
         """Parse P*(audio)(offset) or P*($reg) commands."""
@@ -605,7 +607,7 @@ class ScriptLine:
             return Action(kind, payload=val), tokens_consumed
 
         indices = [int(x.strip()) for x in content.split(",") if x.strip()]
-        line.audio_links.extend(indices)
+        audio_links.extend(indices)
         return Action(kind, payload=offset_val), tokens_consumed
 
     def encode(self) -> bytes:
@@ -615,7 +617,7 @@ class ScriptLine:
         # Conditions: u16 count + encoded conditions
         parts.append(struct.pack("<H", len(self.conditions)))
         for cond in self.conditions:
-            parts.append(cond.left.encode() + cond.op.encode() + cond.right.encode())
+            parts.append(cond.left.encode() + cond.op.opcode + cond.right.encode())
 
         # Actions: u16 count + encoded actions
         parts.append(struct.pack("<H", len(self.actions)))
