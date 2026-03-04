@@ -512,70 +512,113 @@ class ScriptLine:
         cls, part: str, parts: list[str], i: int, audio_links: list[int]
     ) -> tuple[Action, int] | None:
         """Parse an action, returning (Action, tokens_consumed) or None."""
-        if part.startswith("P*("):
-            return cls._deserialize_play_variant(
-                part, parts, i, audio_links, ActionKind.PLAY_VARIANT_RANDOM
-            )
+        # Dispatch table: (matcher, handler)
+        def paren(prefix: str):
+            return lambda p: p.startswith(prefix) and p.endswith(")")
 
-        if part.startswith("PA*("):
-            return cls._deserialize_play_variant(
-                part, parts, i, audio_links, ActionKind.PLAY_VARIANT_ALL
-            )
+        dispatch = [
+            (lambda p: p.startswith("P*("), cls._deserialize_play_variant_random),
+            (lambda p: p.startswith("PA*("), cls._deserialize_play_variant_all),
+            (paren("P("), cls._deserialize_play_media),
+            (paren("PA("), cls._deserialize_play_random),
+            (paren("G("), cls._deserialize_start_game),
+            (paren("J("), cls._deserialize_jump),
+            (lambda p: p == "C", cls._deserialize_cancel),
+            (paren("T("), cls._deserialize_set_timer),
+            (
+                lambda p: p.startswith("$") and any(op.symbol in p for op in ArithOp),
+                cls._deserialize_arithmetic,
+            ),
+        ]
 
-        if part.startswith("P(") and part.endswith(")"):
-            content = part[2:-1]
-            indices = [int(x.strip()) for x in content.split(",")]
-            start_idx = len(audio_links)
-            audio_links.extend(indices)
-            if len(indices) == 1:
-                return Action(ActionKind.PLAY_MEDIA, payload=start_idx), 1
-            else:
-                end_idx = len(audio_links) - 1
-                return Action(
-                    ActionKind.PLAY_MEDIA_RANGE, payload=(start_idx, end_idx)
-                ), 1
-
-        if part.startswith("PA(") and part.endswith(")"):
-            content = part[3:-1]
-            indices = [int(x.strip()) for x in content.split(",")]
-            start_idx = len(audio_links)
-            audio_links.extend(indices)
-            end_idx = len(audio_links) - 1
-            return Action(
-                ActionKind.PLAY_RANDOM_IN_RANGE, payload=(start_idx, end_idx)
-            ), 1
-
-        if part.startswith("G(") and part.endswith(")"):
-            game_id = int(part[2:-1])
-            return Action(ActionKind.START_GAME, payload=game_id), 1
-
-        if part.startswith("J(") and part.endswith(")"):
-            target = ScriptValue.deserialize(part[2:-1])
-            return Action(ActionKind.JUMP, payload=target), 1
-
-        if part == "C":
-            return Action(ActionKind.CANCEL), 1
-
-        if part.startswith("T(") and part.endswith(")"):
-            content = part[2:-1]
-            reg_str, val_str = content.split(",")
-            reg = int(reg_str.strip()[1:])
-            val = ScriptValue.deserialize(val_str.strip())
-            return Action(ActionKind.SET_TIMER, register=reg, payload=val), 1
-
-        for op in [":=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="]:
-            if op in part and part.startswith("$"):
-                left, right = part.split(op, 1)
-                reg = int(left[1:])
-                val = ScriptValue.deserialize(right)
-                arith_op = ArithOp.from_symbol(op)
-                if arith_op:
-                    payload = (arith_op, reg, val)
-                    kind = ActionKind.ARITHMETIC
-                    return Action(kind, register=reg, payload=payload), 1
+        for matcher, parser in dispatch:
+            if matcher(part):
+                return parser(part, parts, i, audio_links)
 
         # TODO: Handle ActionKind.NEGATE_REGISTER
+        return None
 
+    @classmethod
+    def _deserialize_play_variant_random(
+        cls, part: str, parts: list[str], i: int, audio_links: list[int]
+    ) -> tuple[Action, int] | None:
+        return cls._deserialize_play_variant(
+            part, parts, i, audio_links, ActionKind.PLAY_VARIANT_RANDOM
+        )
+
+    @classmethod
+    def _deserialize_play_variant_all(
+        cls, part: str, parts: list[str], i: int, audio_links: list[int]
+    ) -> tuple[Action, int] | None:
+        return cls._deserialize_play_variant(
+            part, parts, i, audio_links, ActionKind.PLAY_VARIANT_ALL
+        )
+
+    @classmethod
+    def _deserialize_play_media(
+        cls, part: str, parts: list[str], i: int, audio_links: list[int]
+    ) -> tuple[Action, int]:
+        content = part[2:-1]
+        indices = [int(x.strip()) for x in content.split(",")]
+        start_idx = len(audio_links)
+        audio_links.extend(indices)
+        if len(indices) == 1:
+            return Action(ActionKind.PLAY_MEDIA, payload=start_idx), 1
+        end_idx = len(audio_links) - 1
+        return Action(ActionKind.PLAY_MEDIA_RANGE, payload=(start_idx, end_idx)), 1
+
+    @classmethod
+    def _deserialize_play_random(
+        cls, part: str, parts: list[str], i: int, audio_links: list[int]
+    ) -> tuple[Action, int]:
+        content = part[3:-1]
+        indices = [int(x.strip()) for x in content.split(",")]
+        start_idx = len(audio_links)
+        audio_links.extend(indices)
+        end_idx = len(audio_links) - 1
+        return Action(ActionKind.PLAY_RANDOM_IN_RANGE, payload=(start_idx, end_idx)), 1
+
+    @classmethod
+    def _deserialize_start_game(
+        cls, part: str, parts: list[str], i: int, audio_links: list[int]
+    ) -> tuple[Action, int]:
+        game_id = int(part[2:-1])
+        return Action(ActionKind.START_GAME, payload=game_id), 1
+
+    @classmethod
+    def _deserialize_jump(
+        cls, part: str, parts: list[str], i: int, audio_links: list[int]
+    ) -> tuple[Action, int]:
+        target = ScriptValue.deserialize(part[2:-1])
+        return Action(ActionKind.JUMP, payload=target), 1
+
+    @classmethod
+    def _deserialize_cancel(
+        cls, part: str, parts: list[str], i: int, audio_links: list[int]
+    ) -> tuple[Action, int]:
+        return Action(ActionKind.CANCEL), 1
+
+    @classmethod
+    def _deserialize_set_timer(
+        cls, part: str, parts: list[str], i: int, audio_links: list[int]
+    ) -> tuple[Action, int]:
+        content = part[2:-1]
+        reg_str, val_str = content.split(",")
+        reg = int(reg_str.strip()[1:])
+        val = ScriptValue.deserialize(val_str.strip())
+        return Action(ActionKind.SET_TIMER, register=reg, payload=val), 1
+
+    @classmethod
+    def _deserialize_arithmetic(
+        cls, part: str, parts: list[str], i: int, audio_links: list[int]
+    ) -> tuple[Action, int] | None:
+        for arith_op in ArithOp:
+            if arith_op.symbol in part:
+                left, right = part.split(arith_op.symbol, 1)
+                reg = int(left[1:])
+                val = ScriptValue.deserialize(right)
+                payload = (arith_op, reg, val)
+                return Action(ActionKind.ARITHMETIC, register=reg, payload=payload), 1
         return None
 
     @classmethod
