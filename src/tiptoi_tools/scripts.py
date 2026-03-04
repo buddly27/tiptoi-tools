@@ -1,10 +1,17 @@
 import re
-import struct
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, TypeAlias
 
-from tiptoi_tools.binary import OID, BinaryReader, BinaryWriter, hi_u8, lo_u8
+from tiptoi_tools.binary import (
+    OID,
+    BinaryReader,
+    BinaryWriter,
+    hi_u8,
+    lo_u8,
+    pack_u8,
+    pack_u16le,
+)
 
 
 class CompareOp(Enum):
@@ -169,7 +176,7 @@ class ScriptValue:
     def encode(self) -> bytes:
         """Encode as 3 bytes: tag (0=reg, 1=const) + u16le value."""
         tag = 0 if self.is_register else 1
-        return struct.pack("<BH", tag, self.raw)
+        return pack_u8(tag) + pack_u16le(self.raw)
 
     @classmethod
     def encode_const(cls, value: int) -> bytes:
@@ -232,51 +239,51 @@ class Action:
 
         if kind == ActionKind.PLAY_MEDIA:
             val = ScriptValue.encode_const(payload)
-            return struct.pack("<H", 0) + kind.opcode + val
+            return pack_u16le(0) + kind.opcode + val
 
         if kind == ActionKind.PLAY_MEDIA_RANGE:
             start, end = payload
             val = ScriptValue.encode_const((start << 8) | end)
-            return struct.pack("<H", 0) + kind.opcode + val
+            return pack_u16le(0) + kind.opcode + val
 
         if kind == ActionKind.PLAY_RANDOM_IN_RANGE:
             start, end = payload
             val = ScriptValue.encode_const((start << 8) | end)
-            return struct.pack("<H", 0) + kind.opcode + val
+            return pack_u16le(0) + kind.opcode + val
 
         if kind == ActionKind.PLAY_VARIANT_RANDOM:
-            return struct.pack("<H", 0) + kind.opcode + payload.encode()
+            return pack_u16le(0) + kind.opcode + payload.encode()
 
         if kind == ActionKind.PLAY_VARIANT_ALL:
-            return struct.pack("<H", 0) + kind.opcode + payload.encode()
+            return pack_u16le(0) + kind.opcode + payload.encode()
 
         if kind == ActionKind.JUMP:
-            return struct.pack("<H", 0) + kind.opcode + payload.encode()
+            return pack_u16le(0) + kind.opcode + payload.encode()
 
         if kind == ActionKind.START_GAME:
             val = ScriptValue.encode_const(payload)
-            return struct.pack("<H", 0) + kind.opcode + val
+            return pack_u16le(0) + kind.opcode + val
 
         if kind == ActionKind.CANCEL:
             val = ScriptValue.encode_const(0xFFFF)
-            return struct.pack("<H", 0) + kind.opcode + val
+            return pack_u16le(0) + kind.opcode + val
 
         if kind == ActionKind.SET_TIMER:
-            return struct.pack("<H", reg) + kind.opcode + payload.encode()
+            return pack_u16le(reg) + kind.opcode + payload.encode()
 
         if kind == ActionKind.NEGATE_REGISTER:
             val = ScriptValue.encode_const(0)
-            return struct.pack("<H", reg) + kind.opcode + val
+            return pack_u16le(reg) + kind.opcode + val
 
         if kind == ActionKind.ARITHMETIC:
             arith_op, _, rhs = payload
-            return struct.pack("<H", reg) + arith_op.opcode + rhs.encode()
+            return pack_u16le(reg) + arith_op.opcode + rhs.encode()
 
         # Unknown action - try to reconstruct from payload
         if kind == ActionKind.UNKNOWN and payload:
             hexcode, reg_idx, val = payload
             opcode = bytes.fromhex(hexcode)
-            return struct.pack("<H", reg_idx) + opcode + val.encode()
+            return pack_u16le(reg_idx) + opcode + val.encode()
 
         raise ValueError(f"Cannot encode action kind: {kind}")
 
@@ -615,19 +622,19 @@ class ScriptLine:
         parts = []
 
         # Conditions: u16 count + encoded conditions
-        parts.append(struct.pack("<H", len(self.conditions)))
+        parts.append(pack_u16le(len(self.conditions)))
         for cond in self.conditions:
             parts.append(cond.left.encode() + cond.op.opcode + cond.right.encode())
 
         # Actions: u16 count + encoded actions
-        parts.append(struct.pack("<H", len(self.actions)))
+        parts.append(pack_u16le(len(self.actions)))
         for action in self.actions:
             parts.append(action.encode())
 
         # Audio links: u16 count + u16 indices
-        parts.append(struct.pack("<H", len(self.audio_links)))
+        parts.append(pack_u16le(len(self.audio_links)))
         for idx in self.audio_links:
-            parts.append(struct.pack("<H", idx))
+            parts.append(pack_u16le(idx))
 
         return b"".join(parts)
 

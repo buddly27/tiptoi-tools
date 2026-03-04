@@ -19,6 +19,16 @@ def u32le(data: bytes, offset: int) -> int:
     return struct.unpack_from("<I", data, offset)[0]
 
 
+def pack_u8(value: int) -> bytes:
+    """Pack an unsigned 8-bit integer to bytes."""
+    return bytes([value & 0xFF])
+
+
+def pack_u16le(value: int) -> bytes:
+    """Pack a little-endian unsigned 16-bit integer to bytes."""
+    return struct.pack("<H", value)
+
+
 def lo_u8(n: int) -> int:
     """Extract the low byte of a 16-bit value."""
     return n & 0xFF
