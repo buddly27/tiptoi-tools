@@ -32,8 +32,8 @@ classifiers = [
 tiptoi-tools = "tiptoi_tools.__main__:main"
 
 [project.urls]
-Documentation = "https://buddly27.github.io/tiptoi-tools"
 Repository = "https://github.com/buddly27/tiptoi-tools"
+Changelog = "https://github.com/buddly27/tiptoi-tools/blob/main/CHANGELOG.md"
 Issues = "https://github.com/buddly27/tiptoi-tools/issues"
 
 [project.optional-dependencies]
